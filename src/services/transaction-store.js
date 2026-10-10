@@ -5,9 +5,20 @@ const { CATEGORIES } = require('../constants/categories');
 
 const DEFAULT_FILE = path.join(__dirname, '../../data/transactions.json');
 const DEFAULT_RULES_FILE = path.join(__dirname, '../../data/category-rules.json');
+const DEFAULT_EXCLUSIONS_FILE = path.join(__dirname, '../../data/exclusion-rules.json');
 const DEFAULT_CATEGORIES_FILE = path.join(__dirname, '../../data/custom-categories.json');
+const DEFAULT_SETTINGS_FILE = path.join(__dirname, '../../data/settings.json');
+const DEFAULT_CURRENCY = 'EUR';
+const CURRENCIES = Object.freeze([
+  { code: 'EUR', name: 'Евро' },
+  { code: 'USD', name: 'Доллары' },
+  { code: 'RUB', name: 'Рубли' },
+  { code: 'TRY', name: 'Турецкие лиры' },
+  { code: 'RSD', name: 'Сербские динары' },
+]);
 let writeQueue = Promise.resolve();
 class CategoryNameError extends Error {}
+class CurrencyCodeError extends Error {}
 
 function enqueue(work) {
   const task = writeQueue.then(work);
@@ -22,6 +33,55 @@ async function readJson(file, fallback) {
     if (error.code === 'ENOENT') return fallback;
     throw error;
   }
+}
+
+async function readSettings(file) {
+  const settings = await readJson(file, { cashCurrency: DEFAULT_CURRENCY, customCurrencies: [] });
+  if (!settings || !Array.isArray(settings.customCurrencies)
+    || typeof settings.cashCurrency !== 'string') {
+    throw new Error('Некорректный файл настроек.');
+  }
+  return settings;
+}
+
+function validOwner(owner) {
+  return Number.isSafeInteger(owner) && owner > 0;
+}
+
+async function listCurrencies({ settingsFile = DEFAULT_SETTINGS_FILE } = {}) {
+  const settings = await readSettings(settingsFile);
+  return [...CURRENCIES, ...settings.customCurrencies.map((code) => ({ code, name: code }))];
+}
+
+async function getCashCurrency({ settingsFile = DEFAULT_SETTINGS_FILE } = {}) {
+  return (await readSettings(settingsFile)).cashCurrency;
+}
+
+function setCashCurrency(code, { settingsFile = DEFAULT_SETTINGS_FILE } = {}) {
+  return enqueue(async () => {
+    const settings = await readSettings(settingsFile);
+    const available = [...CURRENCIES.map((currency) => currency.code), ...settings.customCurrencies];
+    if (!available.includes(code)) throw new CurrencyCodeError('Неизвестная валюта.');
+    settings.cashCurrency = code;
+    await writeJson(settingsFile, settings);
+    return code;
+  });
+}
+
+function addCustomCurrency(input, { settingsFile = DEFAULT_SETTINGS_FILE } = {}) {
+  const code = String(input || '').trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(code)) {
+    throw new CurrencyCodeError('Напишите код валюты из трёх латинских букв, например GBP.');
+  }
+  return enqueue(async () => {
+    const settings = await readSettings(settingsFile);
+    const added = !CURRENCIES.some((currency) => currency.code === code)
+      && !settings.customCurrencies.includes(code);
+    if (added) settings.customCurrencies.push(code);
+    settings.cashCurrency = code;
+    await writeJson(settingsFile, settings);
+    return { code, added };
+  });
 }
 
 async function writeJson(file, value) {
@@ -60,6 +120,40 @@ function addCategory(name, { categoriesFile = DEFAULT_CATEGORIES_FILE } = {}) {
     stored.categories.push(category);
     await writeJson(categoriesFile, stored);
     return { category, added: true };
+  });
+}
+
+function addCashExpense(amount, category, {
+  file = DEFAULT_FILE,
+  categoriesFile = DEFAULT_CATEGORIES_FILE,
+  settingsFile = DEFAULT_SETTINGS_FILE,
+  owner,
+  now = () => new Date(),
+} = {}) {
+  return enqueue(async () => {
+    if (!validOwner(owner)) throw new Error('Некорректный Telegram ID владельца траты.');
+    if (!Number.isFinite(amount) || amount <= 0
+      || !Number.isSafeInteger(Math.round(amount * 100))
+      || Math.abs(amount * 100 - Math.round(amount * 100)) > 1e-8) {
+      throw new Error('Некорректная сумма наличной траты.');
+    }
+    if (!(await listCategories({ categoriesFile })).includes(category)) {
+      throw new Error('Неизвестная категория.');
+    }
+    const stored = await readJson(file, { transactions: [] });
+    if (!Array.isArray(stored.transactions)) throw new Error('Некорректный файл транзакций.');
+    const currency = await getCashCurrency({ settingsFile });
+    const transaction = {
+      date: now().toISOString(),
+      amount,
+      currency,
+      description: 'Наличные траты',
+      category,
+      owner,
+    };
+    stored.transactions.push(transaction);
+    await writeJson(file, stored);
+    return transaction;
   });
 }
 
@@ -103,21 +197,31 @@ function learnedCategory(rules, description) {
 
 function transactionKey(transaction) {
   return JSON.stringify([
-    transaction.date, transaction.amount, transaction.currency, transaction.description,
+    transaction.owner, transaction.date, transaction.amount,
+    transaction.currency, transaction.description,
   ]);
 }
 
 function processStatement(bank, transactions, {
   file = DEFAULT_FILE,
   rulesFile = DEFAULT_RULES_FILE,
+  exclusionsFile = DEFAULT_EXCLUSIONS_FILE,
+  owner,
 } = {}) {
   return enqueue(async () => {
+    if (!validOwner(owner)) throw new Error('Некорректный Telegram ID владельца траты.');
     const stored = await readJson(file, { transactions: [] });
     const allRules = await readJson(rulesFile, {});
+    const allExclusions = await readJson(exclusionsFile, {});
     if (!Array.isArray(stored.transactions) || typeof allRules !== 'object' || !allRules) {
       throw new Error('Некорректный файл данных.');
     }
+    if (typeof allExclusions !== 'object' || !allExclusions
+      || (allExclusions[bank] !== undefined && !Array.isArray(allExclusions[bank]))) {
+      throw new Error('Некорректный файл исключений.');
+    }
     const rules = allRules[bank] || {};
+    const exclusions = new Set(allExclusions[bank] || []);
     const available = new Map();
     stored.transactions.forEach((transaction, index) => {
       const key = transactionKey(transaction);
@@ -127,9 +231,15 @@ function processStatement(bank, transactions, {
 
     let pending = null;
     let added = 0;
+    let skippedExcluded = 0;
     let changed = false;
     for (const transaction of transactions) {
-      const existingIndex = available.get(transactionKey(transaction))?.shift();
+      if (exclusions.has(descriptionKey(transaction.description))) {
+        skippedExcluded++;
+        continue;
+      }
+      const ownedTransaction = { ...transaction, owner };
+      const existingIndex = available.get(transactionKey(ownedTransaction))?.shift();
       const category = learnedCategory(rules, transaction.description);
       if (existingIndex !== undefined) {
         const existing = stored.transactions[existingIndex];
@@ -140,7 +250,7 @@ function processStatement(bank, transactions, {
           pending = transaction;
         }
       } else if (category !== null) {
-        stored.transactions.push({ ...transaction, category });
+        stored.transactions.push({ ...transaction, category, owner });
         added++;
         changed = true;
       } else if (!pending) {
@@ -149,7 +259,26 @@ function processStatement(bank, transactions, {
     }
 
     if (changed) await writeJson(file, stored);
-    return { pending, added, total: transactions.length };
+    return { pending, added, total: transactions.length, skippedExcluded };
+  });
+}
+
+function excludeDescription(bank, description, {
+  exclusionsFile = DEFAULT_EXCLUSIONS_FILE,
+} = {}) {
+  return enqueue(async () => {
+    const allExclusions = await readJson(exclusionsFile, {});
+    if (typeof allExclusions !== 'object' || !allExclusions
+      || (allExclusions[bank] !== undefined && !Array.isArray(allExclusions[bank]))) {
+      throw new Error('Некорректный файл исключений.');
+    }
+    const key = descriptionKey(description);
+    if (!key) throw new Error('Пустое описание операции.');
+    const exclusions = allExclusions[bank] || [];
+    if (exclusions.includes(key)) return false;
+    allExclusions[bank] = [...exclusions, key];
+    await writeJson(exclusionsFile, allExclusions);
+    return true;
   });
 }
 
@@ -169,6 +298,8 @@ function learnCategory(bank, description, category, {
 }
 
 module.exports = {
-  processStatement, learnCategory, descriptionKey,
-  listCategories, addCategory, CategoryNameError,
+  processStatement, learnCategory, excludeDescription, descriptionKey,
+  listCategories, addCategory, addCashExpense, CategoryNameError,
+  CURRENCIES, listCurrencies, getCashCurrency, setCashCurrency,
+  addCustomCurrency, CurrencyCodeError,
 };

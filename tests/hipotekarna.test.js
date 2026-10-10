@@ -6,7 +6,7 @@ const test = require('node:test');
 const XLSX = require('xlsx');
 const { parseHipotekarnaStatement } = require('../src/importers/hipotekarna');
 const {
-  processStatement, learnCategory, descriptionKey, addCategory, listCategories,
+  processStatement, learnCategory, excludeDescription, descriptionKey, addCategory, listCategories,
 } = require('../src/services/transaction-store');
 
 const headers = [
@@ -43,7 +43,10 @@ test('chosen category is learned and duplicate equal expenses remain separate', 
   try {
     const file = path.join(directory, 'transactions.json');
     const rulesFile = path.join(directory, 'category-rules.json');
-    const options = { file, rulesFile, categoriesFile: path.join(directory, 'categories.json') };
+    const options = {
+      file, rulesFile, categoriesFile: path.join(directory, 'categories.json'),
+      exclusionsFile: path.join(directory, 'exclusion-rules.json'), owner: 123,
+    };
     const { transactions } = parseHipotekarnaStatement(statement());
     const first = await processStatement('hipotekarna', transactions, options);
     assert.equal(first.pending.description, 'Shop');
@@ -54,11 +57,16 @@ test('chosen category is learned and duplicate equal expenses remain separate', 
     assert.equal(second.added, 2);
     const saved = JSON.parse(await fs.readFile(file, 'utf8')).transactions;
     assert.equal(saved.length, 2);
-    assert.deepEqual(Object.keys(saved[0]), ['date', 'amount', 'currency', 'description', 'category']);
+    assert.deepEqual(Object.keys(saved[0]), ['date', 'amount', 'currency', 'description', 'category', 'owner']);
+    assert.deepEqual(saved.map((transaction) => transaction.owner), [123, 123]);
     assert.deepEqual(saved.map((transaction) => transaction.category), ['Магазины', 'Магазины']);
     const repeated = await processStatement('hipotekarna', transactions, options);
     assert.equal(repeated.added, 0);
     assert.equal(repeated.pending, null);
+    const anotherOwner = await processStatement('hipotekarna', transactions, { ...options, owner: 456 });
+    assert.equal(anotherOwner.added, 2);
+    assert.deepEqual(JSON.parse(await fs.readFile(file, 'utf8')).transactions.map((transaction) => transaction.owner),
+      [123, 123, 456, 456]);
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }
@@ -71,6 +79,8 @@ test('Spotify changing suffix and close descriptions reuse a learned category', 
       file: path.join(directory, 'transactions.json'),
       rulesFile: path.join(directory, 'category-rules.json'),
       categoriesFile: path.join(directory, 'categories.json'),
+      exclusionsFile: path.join(directory, 'exclusion-rules.json'),
+      owner: 123,
     };
     assert.equal(descriptionKey('SPOTIFY*X123456789'), 'spotify');
     assert.equal(descriptionKey('SPOTIFY*Z999999999'), 'spotify');
@@ -87,6 +97,41 @@ test('Spotify changing suffix and close descriptions reuse a learned category', 
   }
 });
 
+test('excluded descriptions never enter transactions and remain excluded on later imports', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'finance-bot-'));
+  try {
+    const options = {
+      file: path.join(directory, 'transactions.json'),
+      rulesFile: path.join(directory, 'category-rules.json'),
+      exclusionsFile: path.join(directory, 'exclusion-rules.json'),
+      categoriesFile: path.join(directory, 'categories.json'),
+      owner: 123,
+    };
+    await fs.writeFile(options.exclusionsFile, JSON.stringify({ hipotekarna: ['163gift'] }));
+    await learnCategory('hipotekarna', '163gift', 'Подарки', options);
+    await learnCategory('hipotekarna', 'Shop', 'Магазины', options);
+    await excludeDescription('hipotekarna', '  163DEBT  ', options);
+    assert.equal(await excludeDescription('hipotekarna', '163debt', options), false);
+    const transactions = [
+      { date: '2026-10-01', amount: 10, currency: 'EUR', description: '163gift' },
+      { date: '2026-10-02', amount: 20, currency: 'EUR', description: '163debt' },
+      { date: '2026-10-03', amount: 30, currency: 'EUR', description: 'Shop' },
+    ];
+    const result = await processStatement('hipotekarna', transactions, options);
+    assert.deepEqual({ added: result.added, skippedExcluded: result.skippedExcluded, pending: result.pending },
+      { added: 1, skippedExcluded: 2, pending: null });
+    const repeated = await processStatement('hipotekarna', transactions, options);
+    assert.equal(repeated.added, 0);
+    assert.equal(repeated.skippedExcluded, 2);
+    assert.deepEqual(JSON.parse(await fs.readFile(options.file, 'utf8')).transactions
+      .map((transaction) => transaction.description), ['Shop']);
+    assert.deepEqual(JSON.parse(await fs.readFile(options.exclusionsFile, 'utf8')).hipotekarna,
+      ['163gift', '163debt']);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('custom category is persisted, capitalized and usable for learned rules', async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'finance-bot-'));
   try {
@@ -94,6 +139,8 @@ test('custom category is persisted, capitalized and usable for learned rules', a
       file: path.join(directory, 'transactions.json'),
       rulesFile: path.join(directory, 'category-rules.json'),
       categoriesFile: path.join(directory, 'categories.json'),
+      exclusionsFile: path.join(directory, 'exclusion-rules.json'),
+      owner: 123,
     };
     assert.deepEqual(await addCategory('  хобби  ', options), { category: 'Хобби', added: true });
     assert.deepEqual(await addCategory('ХОББИ', options), { category: 'Хобби', added: false });
