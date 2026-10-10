@@ -128,7 +128,8 @@ test('statement button opens bank selection and Hipotekarna asks for a file', as
   const { bot, sent, edited } = createHarness();
   await bot.handleUpdate(messageUpdate());
   assert.equal(sent[0][2].reply_markup.inline_keyboard[0][0].callback_data, 'statement:add');
-  assert.equal(sent[0][2].reply_markup.inline_keyboard[1][0].text, 'Внести наличные траты');
+  assert.equal(sent[0][2].reply_markup.inline_keyboard[0][0].text, '🏦 Добавить выписку');
+  assert.equal(sent[0][2].reply_markup.inline_keyboard[1][0].text, '💰 Внести наличные траты');
 
   await bot.handleUpdate(callbackUpdate('statement:add'));
   assert.deepEqual(edited[0], [ownerId, 1, undefined, undefined]);
@@ -142,6 +143,164 @@ test('statement button opens bank selection and Hipotekarna asks for a file', as
 
   await bot.handleUpdate(messageUpdate({ content: { text: 'не файл' }, updateId: 102 }));
   assert.match(sent[3][1], /Пришлите выписку Hipotekarna/);
+});
+
+test('personal and shared statistics use different owners and offer only populated months', async () => {
+  const transactions = [
+    { date: '2026-09-10', amount: 12, currency: 'EUR', category: 'Аптека', description: 'Mine September', owner: 123 },
+    { date: '2026-10-10', amount: 5, currency: 'USD', category: 'Игры', description: 'Mine October', owner: 123 },
+    { date: '2026-10-11', amount: 20, currency: 'EUR', category: 'Подарки', description: 'Other October', owner: 456 },
+    { date: '2026-11-11', amount: 8, currency: 'EUR', category: 'Подарки', description: 'Other November', owner: 456 },
+  ];
+  const { bot, sent } = createHarness({ readTransactions: async () => transactions }, ['123', '456']);
+  await bot.handleUpdate(messageUpdate());
+  assert.deepEqual(sent[0][2].reply_markup.inline_keyboard.slice(2, 4).map((row) => row[0].text),
+    ['📊 Вывести мою статистику', '📈 Вывести общую статистику']);
+
+  await bot.handleUpdate(callbackUpdate('stats:mine', 101));
+  assert.match(sent.at(-1)[1], /За какой месяц 2026 года/);
+  const mineMonths = sent.at(-1)[2].reply_markup.inline_keyboard.flat();
+  assert.deepEqual(mineMonths.map((button) => button.text), ['сентябрь', 'октябрь']);
+  await bot.handleUpdate(callbackUpdate(mineMonths[0].callback_data, 102));
+  assert.match(sent.at(-1)[1], /Мои траты · сентябрь 2026/);
+  assert.match(sent.at(-1)[1], /Mine September/);
+  assert.doesNotMatch(sent.at(-1)[1], /Other October/);
+
+  await bot.handleUpdate(callbackUpdate('stats:all', 103));
+  const allMonths = sent.at(-1)[2].reply_markup.inline_keyboard.flat();
+  assert.deepEqual(allMonths.map((button) => button.text), ['сентябрь', 'октябрь', 'ноябрь']);
+  await bot.handleUpdate(callbackUpdate(allMonths[1].callback_data, 104));
+  assert.match(sent.at(-1)[1], /Общие траты · октябрь 2026/);
+  assert.match(sent.at(-1)[1], /USD: <b>5,00 \$<\/b>/);
+  assert.match(sent.at(-1)[1], /EUR: <b>20,00 €<\/b>/);
+  assert.equal(sent.at(-1)[2].parse_mode, 'HTML');
+  assert.deepEqual(sent.at(-1)[2].link_preview_options, { is_disabled: true });
+  assert.match(sent.at(-1)[1], /Mine October/);
+  assert.match(sent.at(-1)[1], /Other October/);
+});
+
+test('statistics asks for a year only when multiple years have transactions', async () => {
+  const transactions = [
+    { date: '2026-09-10', amount: 12, currency: 'EUR', category: 'Аптека', description: 'Old', owner: 123 },
+    { date: '2027-01-10', amount: 15, currency: 'EUR', category: 'Игры', description: 'New', owner: 123 },
+  ];
+  const { bot, sent } = createHarness({ readTransactions: async () => transactions });
+  await bot.handleUpdate(callbackUpdate('stats:mine'));
+  assert.equal(sent.at(-1)[1], 'За какой год вывести статистику?');
+  const years = sent.at(-1)[2].reply_markup.inline_keyboard.flat();
+  assert.deepEqual(years.map((button) => button.text), ['2026', '2027']);
+  await bot.handleUpdate(callbackUpdate(years[0].callback_data, 101));
+  assert.match(sent.at(-1)[1], /Мои траты · сентябрь 2026/);
+  assert.match(sent.at(-1)[1], /Old/);
+  assert.doesNotMatch(sent.at(-1)[1], /New/);
+});
+
+test('statistics reports an empty personal history', async () => {
+  const transactions = [
+    { date: '2026-09-10', amount: 12, currency: 'EUR', category: 'Аптека', description: 'Other', owner: 456 },
+  ];
+  const { bot, sent } = createHarness({ readTransactions: async () => transactions }, ['123', '456']);
+  await bot.handleUpdate(callbackUpdate('stats:mine'));
+  assert.match(sent.at(-1)[1], /Транзакций для статистики пока нет/);
+});
+
+test('statistics opens the report immediately when only one year and month exist', async () => {
+  const transactions = [
+    { date: '2026-09-10', amount: 12, currency: 'EUR', category: 'Аптека', description: 'Medicine', owner: 123 },
+  ];
+  const { bot, sent } = createHarness({ readTransactions: async () => transactions });
+  await bot.handleUpdate(callbackUpdate('stats:mine'));
+  assert.equal(sent.length, 1);
+  assert.match(sent[0][1], /Мои траты · сентябрь 2026/);
+  assert.match(sent[0][1], /Medicine/);
+  assert.equal(sent[0][2].reply_markup.inline_keyboard[2][0].callback_data, 'stats:mine');
+});
+
+test('statistics splits a report only if it exceeds the Telegram message limit', async () => {
+  const transactions = Array.from({ length: 10 }, (_, index) => ({
+    date: '2026-09-10', amount: index + 1, currency: 'EUR', category: 'Прочее',
+    description: `Item ${index} ${'X'.repeat(320)}`, owner: 123,
+  }));
+  const { bot, sent } = createHarness({ readTransactions: async () => transactions });
+  await bot.handleUpdate(callbackUpdate('stats:mine'));
+  assert.equal(sent.length, 2);
+  assert.ok(sent.every(([, text]) => text.length < 3900));
+  assert.ok(sent.every(([, , options]) => options.link_preview_options?.is_disabled === true));
+  assert.match(sent[0][1], /По категориям/);
+  assert.match(sent[1][1], /10 крупнейших транзакций/);
+});
+
+test('category report asks for a category, then both dates and shows only matching expenses', async () => {
+  const transactions = [
+    { date: '2026-09-01', amount: 5, currency: 'EUR', category: 'Игры', description: 'First', owner: 123 },
+    { date: '2026-09-30T23:59:00.000Z', amount: 10, currency: 'USD', category: 'Игры', description: 'Last', owner: 123 },
+    { date: '2026-09-15', amount: 20, currency: 'EUR', category: 'Игры', description: 'Someone else', owner: 456 },
+    { date: '2026-09-15', amount: 30, currency: 'EUR', category: 'Аптека', description: 'Other category', owner: 123 },
+  ];
+  const { bot, sent, edited } = createHarness({
+    readTransactions: async () => transactions,
+    categories: async () => [...CATEGORIES, 'Крипта'],
+  }, ['123', '456']);
+  await bot.handleUpdate(messageUpdate());
+  assert.deepEqual(sent[0][2].reply_markup.inline_keyboard.slice(4).map((row) => row[0].callback_data),
+    ['category-report:mine', 'category-report:all']);
+  await bot.handleUpdate(callbackUpdate('category-report:mine', 101));
+  assert.match(sent.at(-1)[1], /По какой категории/);
+  const buttons = sent.at(-1)[2].reply_markup.inline_keyboard.flat();
+  assert.ok(buttons.find((button) => button.text === '🏷️ Крипта'));
+  const games = buttons.find((button) => button.text === '🎮 Игры');
+  await bot.handleUpdate(callbackUpdate(games.callback_data, 102));
+  assert.equal(edited.length, 2);
+  assert.match(sent.at(-1)[1], /С какой даты/);
+  await bot.handleUpdate(messageUpdate({ content: { text: '31.09.2026' }, updateId: 103 }));
+  assert.match(sent.at(-1)[1], /существующую дату/);
+  await bot.handleUpdate(messageUpdate({ content: { text: '01.09.2026' }, updateId: 104 }));
+  assert.match(sent.at(-1)[1], /По какую дату включительно/);
+  await bot.handleUpdate(messageUpdate({ content: { text: '31.08.2026' }, updateId: 105 }));
+  assert.match(sent.at(-1)[1], /не раньше даты начала/);
+  await bot.handleUpdate(messageUpdate({ content: { text: '30.09.2026' }, updateId: 106 }));
+  const [text, options] = sent.at(-1).slice(1);
+  assert.match(text, /First/);
+  assert.match(text, /Last/);
+  assert.match(text, /Мои траты/);
+  assert.doesNotMatch(text, /Someone else|Other category/);
+  assert.match(text, /5,00 €/);
+  assert.match(text, /10,00 \$/);
+  assert.equal(options.parse_mode, 'HTML');
+  assert.deepEqual(options.link_preview_options, { is_disabled: true });
+  assert.equal(options.reply_markup.inline_keyboard[4][0].callback_data, 'category-report:mine');
+});
+
+test('shared category report includes expenses of every owner', async () => {
+  const transactions = [
+    { date: '2026-09-01', amount: 5, currency: 'EUR', category: 'Игры', description: 'Mine', owner: 123 },
+    { date: '2026-09-02', amount: 7, currency: 'EUR', category: 'Игры', description: 'Partner', owner: 456 },
+  ];
+  const { bot, sent } = createHarness({ readTransactions: async () => transactions }, ['123', '456']);
+  await bot.handleUpdate(callbackUpdate('category-report:all'));
+  const games = sent.at(-1)[2].reply_markup.inline_keyboard.flat()
+    .find((button) => button.text === '🎮 Игры');
+  await bot.handleUpdate(callbackUpdate(games.callback_data, 101));
+  await bot.handleUpdate(messageUpdate({ content: { text: '01.09.2026' }, updateId: 102 }));
+  await bot.handleUpdate(messageUpdate({ content: { text: '30.09.2026' }, updateId: 103 }));
+  const text = sent.at(-1)[1];
+  assert.match(text, /Общие траты/);
+  assert.match(text, /Mine/);
+  assert.match(text, /Partner/);
+  assert.match(text, /12,00 €/);
+});
+
+test('category report shows an empty range and can be cancelled', async () => {
+  const { bot, sent } = createHarness({ readTransactions: async () => [] });
+  await bot.handleUpdate(callbackUpdate('category-report:mine'));
+  const button = sent.at(-1)[2].reply_markup.inline_keyboard.flat()[0];
+  await bot.handleUpdate(callbackUpdate(button.callback_data, 101));
+  await bot.handleUpdate(messageUpdate({ content: { text: '01.01.2026' }, updateId: 102 }));
+  await bot.handleUpdate(messageUpdate({ content: { text: '31.01.2026' }, updateId: 103 }));
+  assert.match(sent.at(-1)[1], /За этот период трат нет/);
+  await bot.handleUpdate(callbackUpdate('category-report:mine', 104));
+  await bot.handleUpdate(messageUpdate({ content: { text: '/cancel' }, updateId: 105 }));
+  assert.match(sent.at(-1)[1], /отменён/);
 });
 
 test('cash expense asks for an amount and category, then saves EUR expense', async () => {
@@ -163,7 +322,7 @@ test('cash expense asks for an amount and category, then saves EUR expense', asy
   await bot.handleUpdate(callbackUpdate(button.callback_data, 103));
   assert.deepEqual(saved, [{ amount: 12.5, category: 'Продуктовые магазины', owner: ownerId }]);
   assert.match(sent.at(-1)[1], /Записала наличную трату 12\.50 EUR/);
-  assert.equal(sent.at(-1)[2].reply_markup.inline_keyboard[1][0].text, 'Внести наличные траты');
+  assert.equal(sent.at(-1)[2].reply_markup.inline_keyboard[1][0].text, '💰 Внести наличные траты');
 });
 
 test('cash expense can use a category created during entry', async () => {

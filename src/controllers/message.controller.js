@@ -14,16 +14,29 @@ const {
   excludeDescription,
 } = require('../services/transaction-store');
 const { categoryButtonLabel } = require('../constants/categories');
+const {
+  loadTransactions, availableYears, availableMonths, monthlyStatistics,
+  formatMonthlyStatistics, parseReportDate, categoryExpenses, formatCategoryExpenses, MONTH_NAMES,
+} = require('../services/statistics.service');
 
 const MAX_STATEMENT_SIZE = 10 * 1024 * 1024;
+const MAX_REPORT_MESSAGE_LENGTH = 3900;
+const statisticsReplyOptions = {
+  parse_mode: 'HTML',
+  link_preview_options: { is_disabled: true },
+};
 const statementFormats = {
   [HIPOTEKARNA_BANK]: { name: 'Hipotekarna', extension: '.xls', parse: parseHipotekarnaStatement },
   [PAYONEER_BANK]: { name: 'Payoneer', extension: '.csv', parse: parsePayoneerStatement },
 };
 const mainButtons = {
   reply_markup: { inline_keyboard: [
-    [{ text: 'Добавить выписку', callback_data: 'statement:add' }],
-    [{ text: 'Внести наличные траты', callback_data: 'cash:add' }],
+    [{ text: '🏦 Добавить выписку', callback_data: 'statement:add' }],
+    [{ text: '💰 Внести наличные траты', callback_data: 'cash:add' }],
+    [{ text: '📊 Вывести мою статистику', callback_data: 'stats:mine' }],
+    [{ text: '📈 Вывести общую статистику', callback_data: 'stats:all' }],
+    [{ text: '🗂 Мои траты по категории', callback_data: 'category-report:mine' }],
+    [{ text: '👥 Общие траты по категории', callback_data: 'category-report:all' }],
   ] },
 };
 const bankButtons = {
@@ -54,6 +67,24 @@ function currencyButtons(token, currencies) {
   const rows = [];
   for (let index = 0; index < buttons.length; index += 2) rows.push(buttons.slice(index, index + 2));
   rows.push([{ text: '➕ Другая валюта', callback_data: `currency:custom:${token}` }]);
+  return { reply_markup: { inline_keyboard: rows } };
+}
+
+function choiceButtons(token, values, labels, kind) {
+  const buttons = values.map((value) => ({
+    text: labels(value), callback_data: `stats:${kind}:${token}:${value}`,
+  }));
+  const rows = [];
+  for (let index = 0; index < buttons.length; index += 3) rows.push(buttons.slice(index, index + 3));
+  return { reply_markup: { inline_keyboard: rows } };
+}
+
+function reportCategoryButtons(token, categories) {
+  const buttons = categories.map((category, index) => ({
+    text: categoryButtonLabel(category), callback_data: `category-report:select:${token}:${index}`,
+  }));
+  const rows = [];
+  for (let index = 0; index < buttons.length; index += 2) rows.push(buttons.slice(index, index + 2));
   return { reply_markup: { inline_keyboard: rows } };
 }
 
@@ -96,8 +127,86 @@ function registerMessageController(bot, {
   cashCurrency = getCashCurrency,
   selectCurrency = setCashCurrency,
   createCurrency = addCustomCurrency,
+  readTransactions = loadTransactions,
 } = {}) {
   const state = new Map();
+
+  async function startCategoryReport(context, scope) {
+    const options = await categories();
+    const token = crypto.randomBytes(4).toString('hex');
+    state.set(context.chat.id, { step: 'category-report-category', scope, categories: options, token });
+    await context.reply('По какой категории вывести траты?', reportCategoryButtons(token, options));
+  }
+
+  async function showCategoryReport(context, pending, end) {
+    const transactions = await readTransactions();
+    const report = categoryExpenses(transactions, {
+      category: pending.category, start: pending.start, end,
+      owner: pending.scope === 'mine' ? context.from.id : undefined,
+    });
+    const messages = formatCategoryExpenses(report,
+      { maxLength: MAX_REPORT_MESSAGE_LENGTH, scope: pending.scope });
+    for (const [index, message] of messages.entries()) {
+      await context.reply(message, {
+        ...statisticsReplyOptions,
+        ...(index === messages.length - 1 ? mainButtons : {}),
+      });
+    }
+    state.delete(context.chat.id);
+  }
+
+  async function showStatistics(context, scope, year, month) {
+    const transactions = await readTransactions();
+    const owner = scope === 'mine' ? context.from.id : undefined;
+    const report = monthlyStatistics(transactions, { year, month, owner });
+    state.delete(context.chat.id);
+    if (!report) {
+      await context.reply('За выбранный месяц транзакций пока нет.', mainButtons);
+      return;
+    }
+    const messages = formatMonthlyStatistics(report, scope);
+    const combined = `${messages.summary}\n\n${messages.top}`;
+    if (combined.length <= MAX_REPORT_MESSAGE_LENGTH) {
+      await context.reply(combined, { ...mainButtons, ...statisticsReplyOptions });
+    } else {
+      await context.reply(messages.summary, statisticsReplyOptions);
+      await context.reply(messages.top, { ...mainButtons, ...statisticsReplyOptions });
+    }
+  }
+
+  async function chooseStatisticsYear(context, scope, year) {
+    const transactions = await readTransactions();
+    const owner = scope === 'mine' ? context.from.id : undefined;
+    const months = availableMonths(transactions, year, owner);
+    if (!months.length) {
+      state.delete(context.chat.id);
+      await context.reply('За выбранный год транзакций пока нет.', mainButtons);
+    } else if (months.length === 1) {
+      await showStatistics(context, scope, year, months[0]);
+    } else {
+      const token = crypto.randomBytes(4).toString('hex');
+      state.set(context.chat.id, { step: 'stats-month', scope, year, months, token });
+      await context.reply(`За какой месяц ${year} года вывести статистику?`,
+        choiceButtons(token, months, (month) => MONTH_NAMES[Number(month) - 1], 'month'));
+    }
+  }
+
+  async function startStatistics(context, scope) {
+    const transactions = await readTransactions();
+    const owner = scope === 'mine' ? context.from.id : undefined;
+    const years = availableYears(transactions, owner);
+    if (!years.length) {
+      state.delete(context.chat.id);
+      await context.reply('Транзакций для статистики пока нет.', mainButtons);
+    } else if (years.length === 1) {
+      await chooseStatisticsYear(context, scope, years[0]);
+    } else {
+      const token = crypto.randomBytes(4).toString('hex');
+      state.set(context.chat.id, { step: 'stats-year', scope, years, token });
+      await context.reply('За какой год вывести статистику?',
+        choiceButtons(token, years, (year) => year, 'year'));
+    }
+  }
 
   async function askCashCategory(context, amount) {
     const token = crypto.randomBytes(4).toString('hex');
@@ -156,7 +265,8 @@ function registerMessageController(bot, {
   bot.on('callback_query', async (context) => {
     const action = context.callbackQuery.data;
     if (!action?.startsWith('statement:') && !action?.startsWith('cash:')
-      && !action?.startsWith('currency:')) return;
+      && !action?.startsWith('currency:') && !action?.startsWith('stats:')
+      && !action?.startsWith('category-report:')) return;
     await context.answerCbQuery();
     try {
       await context.editMessageReplyMarkup();
@@ -165,7 +275,49 @@ function registerMessageController(bot, {
     }
     const chatId = context.chat.id;
 
-    if (action === 'cash:add') {
+    if (action === 'category-report:mine' || action === 'category-report:all') {
+      try {
+        await startCategoryReport(context, action.slice('category-report:'.length));
+      } catch {
+        state.delete(chatId);
+        await context.reply('Не удалось загрузить категории.', mainButtons);
+      }
+    } else if (action.startsWith('category-report:select:')) {
+      const [, , token, indexText] = action.split(':');
+      const pending = state.get(chatId);
+      if (pending?.step !== 'category-report-category' || pending.token !== token) return;
+      const category = pending.categories[Number(indexText)];
+      if (!category) return;
+      state.set(chatId, { step: 'category-report-start', category, scope: pending.scope });
+      await context.reply(`С какой даты показать траты в категории «${category}»? Напишите дату в формате ДД.ММ.ГГГГ, например 01.09.2026. Для отмены отправьте /cancel.`);
+    } else if (action === 'stats:mine' || action === 'stats:all') {
+      try {
+        await startStatistics(context, action.slice('stats:'.length));
+      } catch {
+        state.delete(chatId);
+        await context.reply('Не удалось прочитать транзакции для статистики.', mainButtons);
+      }
+    } else if (action.startsWith('stats:year:')) {
+      const [, , token, year] = action.split(':');
+      const pending = state.get(chatId);
+      if (pending?.step !== 'stats-year' || pending.token !== token || !pending.years.includes(year)) return;
+      try {
+        await chooseStatisticsYear(context, pending.scope, year);
+      } catch {
+        state.delete(chatId);
+        await context.reply('Не удалось прочитать транзакции для статистики.', mainButtons);
+      }
+    } else if (action.startsWith('stats:month:')) {
+      const [, , token, month] = action.split(':');
+      const pending = state.get(chatId);
+      if (pending?.step !== 'stats-month' || pending.token !== token || !pending.months.includes(month)) return;
+      try {
+        await showStatistics(context, pending.scope, pending.year, month);
+      } catch {
+        state.delete(chatId);
+        await context.reply('Не удалось вывести статистику.', mainButtons);
+      }
+    } else if (action === 'cash:add') {
       state.set(chatId, { step: 'cash-amount' });
       try {
         const currency = await cashCurrency();
@@ -266,6 +418,49 @@ function registerMessageController(bot, {
     }
     const pending = state.get(chatId);
     const document = context.message.document;
+
+    if (pending?.step?.startsWith('category-report-')) {
+      const input = context.message.text?.trim();
+      if (input === '/cancel') {
+        state.delete(chatId);
+        await context.reply('Просмотр трат по категории отменён.', mainButtons);
+      } else if (pending.step === 'category-report-category') {
+        await context.reply('Выберите категорию кнопкой ниже.',
+          reportCategoryButtons(pending.token, pending.categories));
+      } else {
+        const date = parseReportDate(input);
+        if (!date) {
+          await context.reply('Напишите существующую дату в формате ДД.ММ.ГГГГ, например 01.09.2026.');
+        } else if (pending.step === 'category-report-start') {
+          state.set(chatId, { ...pending, step: 'category-report-end', start: date });
+          await context.reply('По какую дату включительно показать траты? Напишите дату в формате ДД.ММ.ГГГГ.');
+        } else if (date < pending.start) {
+          await context.reply('Дата окончания должна быть не раньше даты начала. Напишите дату окончания ещё раз.');
+        } else {
+          try {
+            await showCategoryReport(context, pending, date);
+          } catch {
+            await context.reply('Не удалось вывести траты. Напишите дату окончания ещё раз.');
+          }
+        }
+      }
+      return;
+    }
+
+    if (pending?.step === 'stats-year' || pending?.step === 'stats-month') {
+      if (context.message.text?.trim() === '/cancel') {
+        state.delete(chatId);
+        await context.reply('Выбор статистики отменён.', mainButtons);
+      } else if (pending.step === 'stats-year') {
+        await context.reply('Выберите год кнопкой ниже.',
+          choiceButtons(pending.token, pending.years, (year) => year, 'year'));
+      } else {
+        await context.reply('Выберите месяц кнопкой ниже.',
+          choiceButtons(pending.token, pending.months,
+            (month) => MONTH_NAMES[Number(month) - 1], 'month'));
+      }
+      return;
+    }
 
     if (pending?.step === 'currency-select') {
       await context.reply('Выберите валюту кнопкой ниже.',
