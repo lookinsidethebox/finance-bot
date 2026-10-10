@@ -144,6 +144,11 @@ test('custom category is persisted, capitalized and usable for learned rules', a
     };
     assert.deepEqual(await addCategory('  хобби  ', options), { category: 'Хобби', added: true });
     assert.deepEqual(await addCategory('ХОББИ', options), { category: 'Хобби', added: false });
+    assert.deepEqual(await addCategory('  арт-дизайн  ', options),
+      { category: 'Арт-дизайн', added: true });
+    for (const invalid of ['163 подарки', 'хобби_спорт', 'еда!', '🛍️ магазины', 'хобби\nспорт']) {
+      assert.throws(() => addCategory(invalid, options), /только буквы, дефис и пробел/);
+    }
     const categories = await listCategories(options);
     assert.equal(categories.includes('Хобби'), true);
     assert.equal(categories.includes('Коммуналка и т.п.'), true);

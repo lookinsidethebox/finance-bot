@@ -307,14 +307,14 @@ function registerMessageController(bot, {
     }
 
     if (pending?.step === 'cash-new-category') {
-      const name = context.message.text?.trim();
-      if (name === '/cancel') {
+      const name = context.message.text;
+      if (name?.trim() === '/cancel') {
         state.set(chatId, { ...pending, step: 'cash-category' });
         await context.reply('Выберите категорию наличной траты.',
           categoryButtons(pending.token, pending.categories, 'cash'));
         return;
       }
-      if (!name) {
+      if (!name?.trim()) {
         await context.reply('Пришлите название новой категории текстом.');
         return;
       }
@@ -349,14 +349,14 @@ function registerMessageController(bot, {
     }
 
     if (pending?.step === 'new-category') {
-      const name = context.message.text?.trim();
-      if (name === '/cancel') {
+      const name = context.message.text;
+      if (name?.trim() === '/cancel') {
         state.set(chatId, { ...pending, step: 'category' });
         await context.reply('Выберите категорию операции.',
           categoryButtons(pending.token, pending.categories));
         return;
       }
-      if (!name) {
+      if (!name?.trim()) {
         await context.reply('Пришлите название новой категории текстом.');
         return;
       }

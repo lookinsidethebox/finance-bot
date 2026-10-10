@@ -251,7 +251,7 @@ test('Hipotekarna file asks for a category and learns the answer', async () => {
   }));
   assert.match(sent.at(-1)[1], /Выберите категорию для операции/);
   const buttons = sent.at(-1)[2].reply_markup.inline_keyboard.flat();
-  assert.equal(buttons.length, 21);
+  assert.equal(buttons.length, CATEGORIES.length + 2);
   assert.equal(buttons.at(-2).text, '➕ Новая категория');
   assert.equal(buttons.at(-1).text, '🚫 Не учитывать');
   assert.equal(buttons.find((button) => button.text === '🛍️ Магазины') !== undefined, true);

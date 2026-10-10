@@ -1,13 +1,18 @@
 require('dotenv').config();
 const { createBot } = require('./bot');
 const { loadConfig } = require('./config');
+const { createMonthlyReminder } = require('./services/monthly-reminder.service');
 
 async function main() {
-  const bot = createBot(loadConfig());
-  process.once('SIGINT', () => bot.stop('SIGINT'));
-  process.once('SIGTERM', () => bot.stop('SIGTERM'));
+  const config = loadConfig();
+  const bot = createBot(config);
+  const reminder = createMonthlyReminder({ telegram: bot.telegram, ownerIds: config.ownerIds });
+  process.once('SIGINT', () => { reminder.stop(); bot.stop('SIGINT'); });
+  process.once('SIGTERM', () => { reminder.stop(); bot.stop('SIGTERM'); });
   await bot.launch({ allowedUpdates: ['message', 'callback_query'] }, () => {
     console.log('Connected to Telegram.');
+    reminder.start();
+    console.log('Monthly reminders scheduled for 12:00 Europe/Podgorica.');
   });
 }
 

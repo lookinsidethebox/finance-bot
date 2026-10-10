@@ -102,11 +102,18 @@ async function listCategories({ categoriesFile = DEFAULT_CATEGORIES_FILE } = {})
 }
 
 function normalizeCategoryName(name) {
-  const clean = String(name || '').normalize('NFKC').trim().replace(/\s+/g, ' ');
+  const clean = String(name || '').normalize('NFKC').replace(/^ +| +$/g, '').replace(/ +/g, ' ');
   if (clean.length < 2 || clean.length > 40) {
     throw new CategoryNameError('Название категории должно содержать от 2 до 40 символов.');
   }
-  return clean[0].toLocaleUpperCase('ru-RU') + clean.slice(1);
+  if (!/^[\p{L} -]+$/u.test(clean)) {
+    throw new CategoryNameError('В названии категории разрешены только буквы, дефис и пробел.');
+  }
+  const firstLetter = /\p{L}/u.exec(clean);
+  if (!firstLetter) throw new CategoryNameError('Название категории должно содержать букву.');
+  const index = firstLetter.index;
+  return clean.slice(0, index) + firstLetter[0].toLocaleUpperCase('ru-RU')
+    + clean.slice(index + firstLetter[0].length);
 }
 
 function addCategory(name, { categoriesFile = DEFAULT_CATEGORIES_FILE } = {}) {
