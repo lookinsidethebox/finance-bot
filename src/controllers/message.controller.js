@@ -3,8 +3,11 @@ const { getReply } = require('../services/reply.service');
 const {
   parseHipotekarnaStatement,
   StatementError,
-  BANK,
+  BANK: HIPOTEKARNA_BANK,
 } = require('../importers/hipotekarna');
+const {
+  parsePayoneerStatement, PayoneerStatementError, BANK: PAYONEER_BANK,
+} = require('../importers/payoneer');
 const {
   processStatement, learnCategory, listCategories, addCategory, addCashExpense, CategoryNameError,
   listCurrencies, getCashCurrency, setCashCurrency, addCustomCurrency, CurrencyCodeError,
@@ -13,6 +16,10 @@ const {
 const { categoryButtonLabel } = require('../constants/categories');
 
 const MAX_STATEMENT_SIZE = 10 * 1024 * 1024;
+const statementFormats = {
+  [HIPOTEKARNA_BANK]: { name: 'Hipotekarna', extension: '.xls', parse: parseHipotekarnaStatement },
+  [PAYONEER_BANK]: { name: 'Payoneer', extension: '.csv', parse: parsePayoneerStatement },
+};
 const mainButtons = {
   reply_markup: { inline_keyboard: [
     [{ text: 'Добавить выписку', callback_data: 'statement:add' }],
@@ -72,7 +79,8 @@ async function downloadStatement(context, document) {
 }
 
 async function replyImportError(context, error) {
-  const detail = error instanceof StatementError ? error.message : 'ошибка чтения или сохранения файла.';
+  const detail = error instanceof StatementError || error instanceof PayoneerStatementError
+    ? error.message : 'ошибка чтения или сохранения файла.';
   await context.reply(`Не удалось импортировать выписку: ${detail}`);
 }
 
@@ -115,7 +123,7 @@ function registerMessageController(bot, {
   }
 
   async function continueImport(context, session) {
-    const result = await process(BANK, session.transactions, { owner: context.from.id });
+    const result = await process(session.bank, session.transactions, { owner: context.from.id });
     session.added += result.added;
     if (result.pending) {
       const token = crypto.randomBytes(4).toString('hex');
@@ -131,15 +139,18 @@ function registerMessageController(bot, {
       return;
     }
     state.delete(context.chat.id);
+    const skipped = session.bank === PAYONEER_BANK
+      ? `, поступлений пропущено ${session.skippedIncoming}, переводов между балансами ${session.skippedTransfers}, других операций ${session.skippedOther}`
+      : `, поступлений пропущено ${session.skippedIncoming}`;
     await context.reply(
-      `Hipotekarna: обработано списаний ${result.total}, новых ${session.added}, исключено ${result.skippedExcluded || 0}, поступлений пропущено ${session.skippedIncoming}.`,
+      `${statementFormats[session.bank].name}: обработано списаний ${result.total}, новых ${session.added}, исключено ${result.skippedExcluded || 0}${skipped}.`,
       mainButtons,
     );
   }
 
-  async function startImport(context, buffer) {
-    const { transactions, skippedIncoming } = parseHipotekarnaStatement(buffer);
-    await continueImport(context, { transactions, skippedIncoming, added: 0 });
+  async function startImport(context, buffer, bank) {
+    const parsed = statementFormats[bank].parse(buffer);
+    await continueImport(context, { ...parsed, bank, added: 0 });
   }
 
   bot.on('callback_query', async (context) => {
@@ -166,12 +177,11 @@ function registerMessageController(bot, {
     } else if (action === 'statement:add') {
       state.delete(chatId);
       await context.reply('Для какого банка добавить выписку?', bankButtons);
-    } else if (action === 'statement:payoneer') {
-      state.delete(chatId);
-      await context.reply('Импорт выписок Payoneer пока в разработке.', mainButtons);
-    } else if (action === 'statement:hipotekarna') {
-      state.set(chatId, { step: 'file' });
-      await context.reply('Пришлите выписку Hipotekarna файлом .xls.');
+    } else if (action === 'statement:payoneer' || action === 'statement:hipotekarna') {
+      const bank = action.slice('statement:'.length);
+      const format = statementFormats[bank];
+      state.set(chatId, { step: 'file', bank });
+      await context.reply(`Пришлите выписку ${format.name} файлом ${format.extension}.`);
     } else if (action.startsWith('statement:new-category:')) {
       const token = action.split(':')[2];
       const pending = state.get(chatId);
@@ -185,7 +195,7 @@ function registerMessageController(bot, {
       const category = pending.categories[Number(indexText)];
       if (!category) return;
       try {
-        await learn(BANK, pending.pending.description, category);
+        await learn(pending.bank, pending.pending.description, category);
         await continueImport(context, pending);
       } catch (error) {
         await replyImportError(context, error);
@@ -196,7 +206,7 @@ function registerMessageController(bot, {
       const pending = state.get(chatId);
       if (pending?.step !== 'category' || pending.token !== token) return;
       try {
-        await exclude(BANK, pending.pending.description);
+        await exclude(pending.bank, pending.pending.description);
         await continueImport(context, pending);
       } catch (error) {
         await replyImportError(context, error);
@@ -329,13 +339,14 @@ function registerMessageController(bot, {
     }
 
     if (pending?.step === 'file') {
-      if (!document || !/\.xls$/i.test(document.file_name || '')) {
-        await context.reply('Пришлите выписку Hipotekarna файлом .xls.');
+      const format = statementFormats[pending.bank];
+      if (!document || !(document.file_name || '').toLowerCase().endsWith(format.extension)) {
+        await context.reply(`Пришлите выписку ${format.name} файлом ${format.extension}.`);
         return;
       }
       try {
         const buffer = await download(context, document);
-        await startImport(context, buffer);
+        await startImport(context, buffer, pending.bank);
       } catch (error) {
         await replyImportError(context, error);
       }
@@ -362,7 +373,7 @@ function registerMessageController(bot, {
       }
       try {
         const result = await createCategory(name);
-        await learn(BANK, pending.pending.description, result.category);
+        await learn(pending.bank, pending.pending.description, result.category);
         await context.reply(result.added
           ? `Категория «${result.category}» добавлена.`
           : `Использую существующую категорию «${result.category}».`);

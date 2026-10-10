@@ -19,10 +19,10 @@ test('cash expenses keep their entry time and the selected currency in transacti
       now: () => new Date('2026-10-10T15:42:19.000Z'),
     };
     assert.equal(await getCashCurrency(options), 'EUR');
-    const first = await addCashExpense(12.5, 'Магазины', options);
+    const first = await addCashExpense(12.5, 'Продуктовые магазины', options);
     assert.deepEqual(first, {
       date: '2026-10-10T15:42:19.000Z', amount: 12.5, currency: 'EUR',
-      description: 'Наличные траты', category: 'Магазины',
+      description: 'Наличные траты', category: 'Продуктовые магазины',
       owner: 123,
     });
 
@@ -52,7 +52,7 @@ test('invalid cash values and currency codes are not persisted', async () => {
       settingsFile: path.join(directory, 'settings.json'),
       owner: 123,
     };
-    await assert.rejects(addCashExpense(0, 'Магазины', options), /сумма/);
+    await assert.rejects(addCashExpense(0, 'Продуктовые магазины', options), /сумма/);
     await assert.rejects(addCashExpense(1, 'Нет такой категории', options), /категория/);
     assert.throws(() => addCustomCurrency('фунты', options), CurrencyCodeError);
     await assert.rejects(setCashCurrency('GBP', options), CurrencyCodeError);

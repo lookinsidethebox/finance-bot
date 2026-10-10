@@ -51,7 +51,7 @@ test('chosen category is learned and duplicate equal expenses remain separate', 
     const first = await processStatement('hipotekarna', transactions, options);
     assert.equal(first.pending.description, 'Shop');
     assert.equal(first.added, 0);
-    await learnCategory('hipotekarna', 'Shop', 'Магазины', options);
+    await learnCategory('hipotekarna', 'Shop', 'Продуктовые магазины', options);
     const second = await processStatement('hipotekarna', transactions, options);
     assert.equal(second.pending, null);
     assert.equal(second.added, 2);
@@ -59,7 +59,7 @@ test('chosen category is learned and duplicate equal expenses remain separate', 
     assert.equal(saved.length, 2);
     assert.deepEqual(Object.keys(saved[0]), ['date', 'amount', 'currency', 'description', 'category', 'owner']);
     assert.deepEqual(saved.map((transaction) => transaction.owner), [123, 123]);
-    assert.deepEqual(saved.map((transaction) => transaction.category), ['Магазины', 'Магазины']);
+    assert.deepEqual(saved.map((transaction) => transaction.category), ['Продуктовые магазины', 'Продуктовые магазины']);
     const repeated = await processStatement('hipotekarna', transactions, options);
     assert.equal(repeated.added, 0);
     assert.equal(repeated.pending, null);
@@ -109,7 +109,7 @@ test('excluded descriptions never enter transactions and remain excluded on late
     };
     await fs.writeFile(options.exclusionsFile, JSON.stringify({ hipotekarna: ['163gift'] }));
     await learnCategory('hipotekarna', '163gift', 'Подарки', options);
-    await learnCategory('hipotekarna', 'Shop', 'Магазины', options);
+    await learnCategory('hipotekarna', 'Shop', 'Продуктовые магазины', options);
     await excludeDescription('hipotekarna', '  163DEBT  ', options);
     assert.equal(await excludeDescription('hipotekarna', '163debt', options), false);
     const transactions = [
@@ -153,6 +153,12 @@ test('custom category is persisted, capitalized and usable for learned rules', a
     assert.equal(categories.includes('Хобби'), true);
     assert.equal(categories.includes('Коммуналка и т.п.'), true);
     assert.equal(categories.includes('Связь и интернет'), true);
+    assert.equal(categories.includes('Рестораны и кафе'), true);
+    assert.equal(categories.includes('Транспорт и такси'), true);
+    assert.equal(categories.includes('Продуктовые магазины'), true);
+    assert.equal(categories.includes('Магазины'), false);
+    assert.equal(categories.includes('Рестораны'), false);
+    assert.equal(categories.includes('Такси'), false);
     assert.equal(categories.includes('коммуналка, связь и интернет'), false);
     await learnCategory('hipotekarna', 'Craft Shop', 'Хобби', options);
     const result = await processStatement('hipotekarna', [

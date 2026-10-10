@@ -40,6 +40,13 @@ function statementBuffer() {
   return XLSX.write(workbook, { bookType: 'biff8', type: 'buffer' });
 }
 
+function payoneerBuffer() {
+  return Buffer.from([
+    'Transaction Date,Transaction Time,Time Zone,Debit Amount,Credit Amount,Currency,Status,Source,Target',
+    '09/15/2026,14:03:05,UTC,12.50,,USD,Completed,USD balance,APPLE.COM/BILL',
+  ].join('\n'));
+}
+
 function callbackUpdate(data, updateId = 100, fromId = ownerId) {
   return {
     update_id: updateId,
@@ -108,9 +115,9 @@ test('accepts a second owner and records their Telegram ID on expenses', async (
   await bot.handleUpdate(callbackUpdate('cash:add', 101, 456));
   await bot.handleUpdate(messageUpdate({ fromId: 456, content: { text: '5' }, updateId: 102 }));
   const button = sent.at(-1)[2].reply_markup.inline_keyboard.flat()
-    .find((item) => item.text === '🛍️ Магазины');
+    .find((item) => item.text === '🛍️ Продуктовые магазины');
   await bot.handleUpdate(callbackUpdate(button.callback_data, 103, 456));
-  assert.deepEqual(saved, [{ amount: 5, category: 'Магазины', owner: 456 }]);
+  assert.deepEqual(saved, [{ amount: 5, category: 'Продуктовые магазины', owner: 456 }]);
   const count = sent.length;
   await bot.handleUpdate(messageUpdate({ fromId: 789, updateId: 104 }));
   await bot.handleUpdate(messageUpdate({ fromId: 456, chatId: -100123, chatType: 'supergroup', updateId: 105 }));
@@ -152,9 +159,9 @@ test('cash expense asks for an amount and category, then saves EUR expense', asy
   await bot.handleUpdate(messageUpdate({ content: { text: '12,50' }, updateId: 102 }));
   assert.match(sent.at(-1)[1], /12\.50 EUR/);
   const button = sent.at(-1)[2].reply_markup.inline_keyboard.flat()
-    .find((item) => item.text === '🛍️ Магазины');
+    .find((item) => item.text === '🛍️ Продуктовые магазины');
   await bot.handleUpdate(callbackUpdate(button.callback_data, 103));
-  assert.deepEqual(saved, [{ amount: 12.5, category: 'Магазины', owner: ownerId }]);
+  assert.deepEqual(saved, [{ amount: 12.5, category: 'Продуктовые магазины', owner: ownerId }]);
   assert.match(sent.at(-1)[1], /Записала наличную трату 12\.50 EUR/);
   assert.equal(sent.at(-1)[2].reply_markup.inline_keyboard[1][0].text, 'Внести наличные траты');
 });
@@ -203,7 +210,7 @@ test('/currency changes the currency used for the next cash expense', async () =
   await bot.handleUpdate(messageUpdate({ content: { text: '5' }, updateId: 103 }));
   const category = sent.at(-1)[2].reply_markup.inline_keyboard.flat()[0];
   await bot.handleUpdate(callbackUpdate(category.callback_data, 104));
-  assert.deepEqual(saved, [{ amount: 5, category: 'Магазины', currency: 'USD' }]);
+  assert.deepEqual(saved, [{ amount: 5, category: 'Продуктовые магазины', currency: 'USD' }]);
   assert.match(sent.at(-1)[1], /5\.00 USD/);
 });
 
@@ -220,12 +227,46 @@ test('/currency accepts a custom three-letter currency code', async () => {
   assert.match(sent.at(-1)[1], /Валюта наличных трат: GBP/);
 });
 
-test('Payoneer reports that import is in development', async () => {
-  const { bot, sent, edited } = createHarness();
+test('Payoneer CSV asks for a category and learns Target under its own bank', async () => {
+  const processed = [];
+  const learned = [];
+  let calls = 0;
+  const { bot, sent, edited } = createHarness({
+    download: async () => payoneerBuffer(),
+    process: async (bank, transactions, options) => {
+      processed.push({ bank, transactions, owner: options.owner });
+      calls++;
+      return calls === 1
+        ? { pending: transactions[0], added: 0, total: 1 }
+        : { pending: null, added: 1, total: 1 };
+    },
+    learn: async (bank, description, category) => { learned.push({ bank, description, category }); },
+  });
   await bot.handleUpdate(callbackUpdate('statement:payoneer'));
   assert.equal(edited.length, 1);
-  assert.match(sent[0][1], /Payoneer пока в разработке/);
-  assert.equal(sent[0][2].reply_markup.inline_keyboard[0][0].text, 'Добавить выписку');
+  assert.match(sent[0][1], /Пришлите выписку Payoneer файлом \.csv/);
+  await bot.handleUpdate(messageUpdate({
+    content: { document: { file_id: 'file-1', file_name: 'wrong.xls', file_size: 100 } },
+    updateId: 101,
+  }));
+  assert.match(sent.at(-1)[1], /файлом \.csv/);
+  assert.equal(processed.length, 0);
+  await bot.handleUpdate(messageUpdate({
+    content: { document: { file_id: 'file-2', file_name: 'statement.csv', file_size: 100 } },
+    updateId: 102,
+  }));
+  assert.deepEqual(processed[0], {
+    bank: 'payoneer', owner: ownerId,
+    transactions: [{
+      date: '2026-09-15T14:03:05.000Z', amount: 12.5,
+      currency: 'USD', description: 'APPLE.COM/BILL',
+    }],
+  });
+  const button = sent.at(-1)[2].reply_markup.inline_keyboard.flat()
+    .find((item) => item.text === '🎮 Игры');
+  await bot.handleUpdate(callbackUpdate(button.callback_data, 103));
+  assert.deepEqual(learned, [{ bank: 'payoneer', description: 'APPLE.COM/BILL', category: 'Игры' }]);
+  assert.match(sent.at(-1)[1], /Payoneer: обработано списаний 1, новых 1/);
 });
 
 test('Hipotekarna file asks for a category and learns the answer', async () => {
@@ -254,10 +295,10 @@ test('Hipotekarna file asks for a category and learns the answer', async () => {
   assert.equal(buttons.length, CATEGORIES.length + 2);
   assert.equal(buttons.at(-2).text, '➕ Новая категория');
   assert.equal(buttons.at(-1).text, '🚫 Не учитывать');
-  assert.equal(buttons.find((button) => button.text === '🛍️ Магазины') !== undefined, true);
+  assert.equal(buttons.find((button) => button.text === '🛍️ Продуктовые магазины') !== undefined, true);
   assert.equal(buttons.find((button) => button.text === '🏠 Коммуналка и т.п.') !== undefined, true);
-  await bot.handleUpdate(callbackUpdate(buttons.find((button) => button.text === '🛍️ Магазины').callback_data, 102));
-  assert.deepEqual(learned, { bank: 'hipotekarna', description: 'Shop', category: 'Магазины' });
+  await bot.handleUpdate(callbackUpdate(buttons.find((button) => button.text === '🛍️ Продуктовые магазины').callback_data, 102));
+  assert.deepEqual(learned, { bank: 'hipotekarna', description: 'Shop', category: 'Продуктовые магазины' });
   assert.match(sent.at(-1)[1], /новых 1/);
 });
 
