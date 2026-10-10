@@ -164,11 +164,10 @@ function formatMonthlyStatistics(report, scope) {
   const totals = report.currencies.map((currency) =>
     `• ${escapeHtml(currency)}: ${bold(amountText(report.totals.get(currency), currency))}`);
   const categories = report.categories.map(([category, amounts]) => {
-    const primary = bold(amountText(amounts.get('EUR') || 0, 'EUR'));
-    const additional = report.currencies.filter((currency) => currency !== 'EUR' && amounts.has(currency))
+    const values = report.currencies.filter((currency) => (amounts.get(currency) || 0) !== 0)
       .map((currency) => bold(amountText(amounts.get(currency), currency)));
-    return `${escapeHtml(categoryButtonLabel(category))} — ${primary}${additional.length ? ` (${additional.join(' · ')})` : ''}`;
-  });
+    return values.length ? `${escapeHtml(categoryButtonLabel(category))} — ${values.join(' + ')}` : null;
+  }).filter(Boolean);
   const summary = [heading, '', bold('💰 Всего'), ...totals,
     '', bold('По категориям'), ...categories].join('\n');
   const top = [bold('🏆 10 крупнейших транзакций'), ...report.top.map((transaction, index) => {

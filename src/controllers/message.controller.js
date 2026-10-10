@@ -11,7 +11,8 @@ const {
 const {
   processStatement, learnCategory, listCategories, addCategory, addCashExpense, CategoryNameError,
   listCurrencies, getCashCurrency, setCashCurrency, addCustomCurrency, CurrencyCodeError,
-  excludeDescription,
+  excludeDescription, descriptionKey, parseAppStoreItems, appStoreCategories,
+  saveAppStoreReceipt, AppStoreInputError,
 } = require('../services/transaction-store');
 const { categoryButtonLabel } = require('../constants/categories');
 const {
@@ -36,6 +37,7 @@ const mainButtons = {
   reply_markup: { inline_keyboard: [
     [{ text: '🏦 Добавить выписку', callback_data: 'statement:add' }],
     [{ text: '💰 Внести наличные траты', callback_data: 'cash:add' }],
+    [{ text: '🍎 Внести траты на App Store', callback_data: 'app-store:add' }],
     [{ text: '📊 Вывести мою статистику', callback_data: 'stats:mine' }],
     [{ text: '📈 Вывести общую статистику', callback_data: 'stats:all' }],
     [{ text: '🗂 Мои траты по категории', callback_data: 'category-report:mine' }],
@@ -60,6 +62,13 @@ function categoryButtons(token, categories, kind = 'statement') {
     rows.push([{ text: '🚫 Не учитывать', callback_data: `statement:exclude:${token}` }]);
   }
   return { reply_markup: { inline_keyboard: rows } };
+}
+
+function appStoreCategoryButtons(token, index) {
+  return { reply_markup: { inline_keyboard: [[
+    { text: categoryButtonLabel('Подписки'), callback_data: `app-store:category:${token}:${index}:s` },
+    { text: categoryButtonLabel('Игры'), callback_data: `app-store:category:${token}:${index}:g` },
+  ]] } };
 }
 
 function currencyButtons(token, currencies) {
@@ -105,6 +114,12 @@ function reportDateExamples(date) {
     end: `${parts.day}.${parts.month}.${parts.year}` };
 }
 
+const htmlPromptOptions = { parse_mode: 'HTML' };
+
+function escapeHtml(value) {
+  return String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+}
+
 async function downloadStatement(context, document) {
   if (document.file_size > MAX_STATEMENT_SIZE) {
     throw new StatementError('Файл слишком большой: максимум 10 МБ.');
@@ -133,6 +148,8 @@ function registerMessageController(bot, {
   createCategory = addCategory,
   exclude = excludeDescription,
   saveCash = addCashExpense,
+  saveAppStore = saveAppStoreReceipt,
+  lookupAppStoreCategories = appStoreCategories,
   currencies = listCurrencies,
   cashCurrency = getCashCurrency,
   selectCurrency = setCashCurrency,
@@ -141,6 +158,37 @@ function registerMessageController(bot, {
   now = () => new Date(),
 } = {}) {
   const state = new Map();
+
+  async function completeAppStore(context, pending) {
+    let result;
+    try {
+      const items = pending.items.map((item, index) => ({ ...item,
+        category: pending.categories[index] }));
+      result = await saveAppStore(pending.date, items, { owner: context.from.id });
+    } catch {
+      state.set(context.chat.id, { step: 'app-store-items', date: pending.date });
+      await context.reply('Не удалось сохранить чек App Store. Пришлите весь список приложений ещё раз.');
+      return;
+    }
+    state.delete(context.chat.id);
+    const message = result.duplicate
+      ? `Этот чек App Store уже внесён.${result.removedApple ? ' Списание Apple заменено.' : ''}`
+      : `Внесено приложений: ${result.added}. Сумма чека: ${result.total.toFixed(2)} USD.${result.removedApple ? ' Списание Apple заменено.' : ' Совпадающее списание Apple пока не найдено.'}`;
+    await context.reply(message, { ...mainButtons,
+      link_preview_options: { is_disabled: true } });
+  }
+
+  async function askNextAppStoreCategory(context, pending) {
+    const index = pending.categories.findIndex((category) => category === null);
+    if (index === -1) {
+      await completeAppStore(context, pending);
+      return;
+    }
+    const next = { ...pending, index };
+    state.set(context.chat.id, next);
+    await context.reply(`К какой категории отнести «${pending.items[index].name}»?`,
+      appStoreCategoryButtons(pending.token, index));
+  }
 
   async function startCategoryReport(context, scope) {
     const options = await categories();
@@ -260,7 +308,7 @@ function registerMessageController(bot, {
     }
     state.delete(context.chat.id);
     const skipped = session.bank === PAYONEER_BANK
-      ? `, поступлений пропущено ${session.skippedIncoming}, переводов между балансами ${session.skippedTransfers}, других операций ${session.skippedOther}`
+      ? `, поступлений пропущено ${session.skippedIncoming}, переводов между балансами ${session.skippedTransfers}, чеков App Store ${result.skippedAppStore || 0}, других операций ${session.skippedOther}`
       : `, поступлений пропущено ${session.skippedIncoming}`;
     await context.reply(
       `${statementFormats[session.bank].name}: обработано списаний ${result.total}, новых ${session.added}, исключено ${result.skippedExcluded || 0}${skipped}.`,
@@ -277,7 +325,7 @@ function registerMessageController(bot, {
     const action = context.callbackQuery.data;
     if (!action?.startsWith('statement:') && !action?.startsWith('cash:')
       && !action?.startsWith('currency:') && !action?.startsWith('stats:')
-      && !action?.startsWith('category-report:')) return;
+      && !action?.startsWith('category-report:') && !action?.startsWith('app-store:')) return;
     await context.answerCbQuery();
     try {
       await context.editMessageReplyMarkup();
@@ -300,7 +348,9 @@ function registerMessageController(bot, {
       const category = pending.categories[Number(indexText)];
       if (!category) return;
       state.set(chatId, { step: 'category-report-start', category, scope: pending.scope });
-      await context.reply(`С какой даты показать траты в категории «${category}»? Напишите дату в формате ДД.ММ.ГГГГ, например ${reportDateExamples(now()).start}. Для отмены отправьте /cancel.`);
+      const example = reportDateExamples(now()).start;
+      await context.reply(`С какой даты показать траты в категории «${escapeHtml(category)}»? Напишите дату в формате ДД.ММ.ГГГГ, например <code>${example}</code>. Для отмены отправьте /cancel.`,
+        htmlPromptOptions);
     } else if (action === 'stats:mine' || action === 'stats:all') {
       try {
         await startStatistics(context, action.slice('stats:'.length));
@@ -328,6 +378,21 @@ function registerMessageController(bot, {
         state.delete(chatId);
         await context.reply('Не удалось вывести статистику.', mainButtons);
       }
+    } else if (action === 'app-store:add') {
+      state.set(chatId, { step: 'app-store-date' });
+      const example = reportDateExamples(now()).end;
+      await context.reply(`Напишите дату чека App Store в формате ДД.ММ.ГГГГ, например <code>${example}</code>. Для отмены отправьте /cancel.`,
+        htmlPromptOptions);
+    } else if (action.startsWith('app-store:category:')) {
+      const [, , token, indexText, code] = action.split(':');
+      const pending = state.get(chatId);
+      if (pending?.step !== 'app-store-category' || pending.token !== token
+        || pending.index !== Number(indexText) || !['s', 'g'].includes(code)) return;
+      const category = code === 's' ? 'Подписки' : 'Игры';
+      const key = descriptionKey(pending.items[pending.index].name);
+      const categories = pending.categories.map((value, index) =>
+        descriptionKey(pending.items[index].name) === key ? category : value);
+      await askNextAppStoreCategory(context, { ...pending, categories });
     } else if (action === 'cash:add') {
       state.set(chatId, { step: 'cash-amount' });
       try {
@@ -430,6 +495,55 @@ function registerMessageController(bot, {
     const pending = state.get(chatId);
     const document = context.message.document;
 
+    if (pending?.step === 'app-store-date' || pending?.step === 'app-store-items'
+      || pending?.step === 'app-store-category') {
+      const input = context.message.text?.trim();
+      if (input === '/cancel') {
+        state.delete(chatId);
+        await context.reply('Внесение трат App Store отменено.', mainButtons);
+      } else if (pending.step === 'app-store-category') {
+        await context.reply('Выберите категорию приложения кнопкой.',
+          appStoreCategoryButtons(pending.token, pending.index));
+      } else if (pending.step === 'app-store-date') {
+        const date = parseReportDate(input);
+        if (!date) {
+          const example = reportDateExamples(now()).end;
+          await context.reply(`Напишите существующую дату в формате ДД.ММ.ГГГГ, например <code>${example}</code>.`,
+            htmlPromptOptions);
+        } else {
+          state.set(chatId, { step: 'app-store-items', date });
+          const example = 'Приложение – $0';
+          await context.reply(`Напишите приложения из чека: каждое с новой строки в формате <code>${example}</code>. Замените 0 на фактическую сумму в USD для каждого приложения. Для отмены отправьте /cancel.`,
+            htmlPromptOptions);
+        }
+      } else {
+        let items;
+        try {
+          items = parseAppStoreItems(input);
+        } catch (error) {
+          await context.reply(error instanceof AppStoreInputError
+            ? `${error.message} Пришлите весь список приложений ещё раз.`
+            : 'Напишите приложения списком, по одному на строку.');
+          return;
+        }
+        let learned;
+        try {
+          learned = await lookupAppStoreCategories(items);
+          if (!Array.isArray(learned) || learned.length !== items.length) {
+            throw new Error('Некорректные категории приложений.');
+          }
+        } catch {
+          await context.reply('Не удалось прочитать категории App Store. Пришлите список ещё раз.');
+          return;
+        }
+        await askNextAppStoreCategory(context, {
+          step: 'app-store-category', date: pending.date, items, categories: learned,
+          token: crypto.randomBytes(4).toString('hex'),
+        });
+      }
+      return;
+    }
+
     if (pending?.step?.startsWith('category-report-')) {
       const input = context.message.text?.trim();
       if (input === '/cancel') {
@@ -442,10 +556,13 @@ function registerMessageController(bot, {
         const date = parseReportDate(input);
         if (!date) {
           const example = reportDateExamples(now())[pending.step === 'category-report-start' ? 'start' : 'end'];
-          await context.reply(`Напишите существующую дату в формате ДД.ММ.ГГГГ, например ${example}.`);
+          await context.reply(`Напишите существующую дату в формате ДД.ММ.ГГГГ, например <code>${example}</code>.`,
+            htmlPromptOptions);
         } else if (pending.step === 'category-report-start') {
           state.set(chatId, { ...pending, step: 'category-report-end', start: date });
-          await context.reply(`По какую дату включительно показать траты? Напишите дату в формате ДД.ММ.ГГГГ, например ${reportDateExamples(now()).end}.`);
+          const example = reportDateExamples(now()).end;
+          await context.reply(`По какую дату включительно показать траты? Напишите дату в формате ДД.ММ.ГГГГ, например <code>${example}</code>.`,
+            htmlPromptOptions);
         } else if (date < pending.start) {
           await context.reply('Дата окончания должна быть не раньше даты начала. Напишите дату окончания ещё раз.');
         } else {

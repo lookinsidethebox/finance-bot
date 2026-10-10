@@ -92,7 +92,11 @@ test('sums by currency and category and ranks nominal amounts without conversion
   assert.match(text.summary, /<b>По категориям<\/b>/);
   assert.doesNotMatch(text.summary, /🗂 По категориям/);
   assert.match(text.summary, /Аптека — <b>50,30 €<\/b>/);
-  assert.match(text.summary, /Игры — <b>0,00 €<\/b> \(<b>120,00 \$<\/b>\)/);
+  assert.match(text.summary, /Игры — <b>120,00 \$<\/b>/);
+  assert.doesNotMatch(text.summary, /Игры — <b>0,00 €/);
+  const sharedText = formatMonthlyStatistics(everyone, 'all');
+  assert.match(sharedText.summary, /Аптека — <b>50,30 €<\/b> \+ <b>10,00 \$<\/b>/);
+  assert.doesNotMatch(sharedText.summary, /\(<b>10,00 \$<\/b>\)/);
   assert.doesNotMatch(text.summary, /Прочее/);
   assert.doesNotMatch(text.summary, /Порядок по суммам/);
   assert.match(text.top, /<b>🏆 10 крупнейших транзакций<\/b>/);

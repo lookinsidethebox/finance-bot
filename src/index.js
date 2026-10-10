@@ -2,9 +2,11 @@ require('dotenv').config();
 const { createBot } = require('./bot');
 const { loadConfig } = require('./config');
 const { createMonthlyReminder } = require('./services/monthly-reminder.service');
+const { migrateAppStoreReceipts } = require('./services/transaction-store');
 
 async function main() {
   const config = loadConfig();
+  await migrateAppStoreReceipts();
   const bot = createBot(config);
   const reminder = createMonthlyReminder({ telegram: bot.telegram, ownerIds: config.ownerIds });
   process.once('SIGINT', () => { reminder.stop(); bot.stop('SIGINT'); });

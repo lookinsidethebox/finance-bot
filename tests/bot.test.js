@@ -12,6 +12,7 @@ function createHarness(services, ownerIds = [String(ownerId)]) {
   const edited = [];
   const bot = createBot({ token: 'test-token', ownerIds }, {
     categories: async () => CATEGORIES,
+    lookupAppStoreCategories: async (items) => items.map(() => 'Подписки'),
     currencies: async () => CURRENCIES,
     cashCurrency: async () => 'EUR',
     ...services,
@@ -154,7 +155,7 @@ test('personal and shared statistics use different owners and offer only populat
   ];
   const { bot, sent } = createHarness({ readTransactions: async () => transactions }, ['123', '456']);
   await bot.handleUpdate(messageUpdate());
-  assert.deepEqual(sent[0][2].reply_markup.inline_keyboard.slice(2, 4).map((row) => row[0].text),
+  assert.deepEqual(sent[0][2].reply_markup.inline_keyboard.slice(3, 5).map((row) => row[0].text),
     ['📊 Вывести мою статистику', '📈 Вывести общую статистику']);
 
   await bot.handleUpdate(callbackUpdate('stats:mine', 101));
@@ -213,7 +214,7 @@ test('statistics opens the report immediately when only one year and month exist
   assert.equal(sent.length, 1);
   assert.match(sent[0][1], /Мои траты · сентябрь 2026/);
   assert.match(sent[0][1], /Medicine/);
-  assert.equal(sent[0][2].reply_markup.inline_keyboard[2][0].callback_data, 'stats:mine');
+  assert.equal(sent[0][2].reply_markup.inline_keyboard[3][0].callback_data, 'stats:mine');
 });
 
 test('statistics splits a report only if it exceeds the Telegram message limit', async () => {
@@ -243,7 +244,7 @@ test('category report asks for a category, then both dates and shows only matchi
     now: () => new Date('2026-10-10T23:30:00.000Z'),
   }, ['123', '456']);
   await bot.handleUpdate(messageUpdate());
-  assert.deepEqual(sent[0][2].reply_markup.inline_keyboard.slice(4).map((row) => row[0].callback_data),
+  assert.deepEqual(sent[0][2].reply_markup.inline_keyboard.slice(5).map((row) => row[0].callback_data),
     ['category-report:mine', 'category-report:all']);
   await bot.handleUpdate(callbackUpdate('category-report:mine', 101));
   assert.match(sent.at(-1)[1], /По какой категории/);
@@ -253,15 +254,23 @@ test('category report asks for a category, then both dates and shows only matchi
   await bot.handleUpdate(callbackUpdate(games.callback_data, 102));
   assert.equal(edited.length, 2);
   assert.match(sent.at(-1)[1], /С какой даты/);
-  assert.match(sent.at(-1)[1], /например 01\.10\.2026/);
+  assert.match(sent.at(-1)[1], /например <code>01\.10\.2026<\/code>/);
+  assert.equal(sent.at(-1)[2].parse_mode, 'HTML');
+  assert.equal(sent.at(-1)[2].reply_markup, undefined);
   await bot.handleUpdate(messageUpdate({ content: { text: '31.09.2026' }, updateId: 103 }));
   assert.match(sent.at(-1)[1], /существующую дату/);
-  assert.match(sent.at(-1)[1], /например 01\.10\.2026/);
+  assert.match(sent.at(-1)[1], /например <code>01\.10\.2026<\/code>/);
+  assert.equal(sent.at(-1)[2].parse_mode, 'HTML');
+  assert.equal(sent.at(-1)[2].reply_markup, undefined);
   await bot.handleUpdate(messageUpdate({ content: { text: '01.09.2026' }, updateId: 104 }));
   assert.match(sent.at(-1)[1], /По какую дату включительно/);
-  assert.match(sent.at(-1)[1], /например 11\.10\.2026/);
+  assert.match(sent.at(-1)[1], /например <code>11\.10\.2026<\/code>/);
+  assert.equal(sent.at(-1)[2].parse_mode, 'HTML');
+  assert.equal(sent.at(-1)[2].reply_markup, undefined);
   await bot.handleUpdate(messageUpdate({ content: { text: '31.09.2026' }, updateId: 105 }));
-  assert.match(sent.at(-1)[1], /например 11\.10\.2026/);
+  assert.match(sent.at(-1)[1], /например <code>11\.10\.2026<\/code>/);
+  assert.equal(sent.at(-1)[2].parse_mode, 'HTML');
+  assert.equal(sent.at(-1)[2].reply_markup, undefined);
   await bot.handleUpdate(messageUpdate({ content: { text: '31.08.2026' }, updateId: 106 }));
   assert.match(sent.at(-1)[1], /не раньше даты начала/);
   await bot.handleUpdate(messageUpdate({ content: { text: '30.09.2026' }, updateId: 107 }));
@@ -274,7 +283,7 @@ test('category report asks for a category, then both dates and shows only matchi
   assert.match(text, /10,00 \$/);
   assert.equal(options.parse_mode, 'HTML');
   assert.deepEqual(options.link_preview_options, { is_disabled: true });
-  assert.equal(options.reply_markup.inline_keyboard[4][0].callback_data, 'category-report:mine');
+  assert.equal(options.reply_markup.inline_keyboard[5][0].callback_data, 'category-report:mine');
 });
 
 test('shared category report includes expenses of every owner', async () => {
@@ -307,6 +316,91 @@ test('category report shows an empty range and can be cancelled', async () => {
   await bot.handleUpdate(callbackUpdate('category-report:mine', 104));
   await bot.handleUpdate(messageUpdate({ content: { text: '/cancel' }, updateId: 105 }));
   assert.match(sent.at(-1)[1], /отменён/);
+});
+
+test('App Store button collects a date and code-formatted item template, then saves USD items for the sender', async () => {
+  const saved = [];
+  const { bot, sent } = createHarness({
+    now: () => new Date('2026-10-10T23:30:00.000Z'),
+    saveAppStore: async (date, items, options) => {
+      saved.push({ date, items, owner: options.owner });
+      return { added: items.length, total: 13.5, removedApple: 1, duplicate: false };
+    },
+  }, ['123', '456']);
+  await bot.handleUpdate(messageUpdate({ fromId: 456 }));
+  assert.equal(sent.at(-1)[2].reply_markup.inline_keyboard[2][0].callback_data, 'app-store:add');
+  await bot.handleUpdate(callbackUpdate('app-store:add', 101, 456));
+  assert.match(sent.at(-1)[1], /<code>11\.10\.2026<\/code>/);
+  assert.equal(sent.at(-1)[2].parse_mode, 'HTML');
+  assert.equal(sent.at(-1)[2].reply_markup, undefined);
+  await bot.handleUpdate(messageUpdate({ fromId: 456, content: { text: '31.09.2026' }, updateId: 102 }));
+  assert.match(sent.at(-1)[1], /существующую дату/);
+  assert.equal(sent.at(-1)[2].parse_mode, 'HTML');
+  assert.equal(sent.at(-1)[2].reply_markup, undefined);
+  await bot.handleUpdate(messageUpdate({ fromId: 456, content: { text: '21.09.2026' }, updateId: 103 }));
+  assert.match(sent.at(-1)[1], /<code>Приложение – \$0<\/code>/);
+  assert.match(sent.at(-1)[1], /Замените 0 на фактическую сумму/);
+  assert.equal(sent.at(-1)[2].parse_mode, 'HTML');
+  assert.equal(sent.at(-1)[2].reply_markup, undefined);
+  await bot.handleUpdate(messageUpdate({ fromId: 456, content: { text: 'bad line' }, updateId: 104 }));
+  assert.match(sent.at(-1)[1], /Строка 1/);
+  assert.match(sent.at(-1)[1], /Пришлите весь список приложений ещё раз/);
+  assert.equal(saved.length, 0);
+  await bot.handleUpdate(messageUpdate({ fromId: 456,
+    content: { text: 'Music – $10\nCloud – $0' }, updateId: 105 }));
+  assert.match(sent.at(-1)[1], /Строка 2: сумма должна быть больше нуля/);
+  assert.match(sent.at(-1)[1], /Пришлите весь список приложений ещё раз/);
+  assert.equal(saved.length, 0);
+  await bot.handleUpdate(messageUpdate({ fromId: 456,
+    content: { text: 'Music – $10\nCloud – $3,50' }, updateId: 106 }));
+  assert.deepEqual(saved, [{ date: '2026-09-21', items: [
+    { name: 'Music', amount: 10, category: 'Подписки' },
+    { name: 'Cloud', amount: 3.5, category: 'Подписки' },
+  ], owner: 456 }]);
+  assert.match(sent.at(-1)[1], /Списание Apple заменено/);
+  assert.doesNotMatch(sent.at(-1)[1], /APPLE\.COM\/BILL/);
+  assert.deepEqual(sent.at(-1)[2].link_preview_options, { is_disabled: true });
+});
+
+test('App Store asks once per new app name and uses learned categories for others', async () => {
+  const saved = [];
+  const { bot, sent } = createHarness({
+    lookupAppStoreCategories: async () => ['Подписки', null, null, null],
+    saveAppStore: async (date, items) => {
+      saved.push({ date, items });
+      return { added: items.length, total: 28, removedApple: 0, duplicate: false };
+    },
+  });
+  await bot.handleUpdate(callbackUpdate('app-store:add', 101));
+  await bot.handleUpdate(messageUpdate({ content: { text: '04.10.2026' }, updateId: 102 }));
+  await bot.handleUpdate(messageUpdate({ content: {
+    text: 'Music – $1\nFood Hunt – $10\nFood Hunt – $2\nRomance Club – $15',
+  }, updateId: 103 }));
+  assert.match(sent.at(-1)[1], /Food Hunt/);
+  const game = sent.at(-1)[2].reply_markup.inline_keyboard[0][1];
+  assert.equal(game.text, '🎮 Игры');
+  await bot.handleUpdate(callbackUpdate(game.callback_data, 104));
+  assert.match(sent.at(-1)[1], /Romance Club/);
+  const subscription = sent.at(-1)[2].reply_markup.inline_keyboard[0][0];
+  await bot.handleUpdate(callbackUpdate(subscription.callback_data, 105));
+  assert.deepEqual(saved, [{ date: '2026-10-04', items: [
+    { name: 'Music', amount: 1, category: 'Подписки' },
+    { name: 'Food Hunt', amount: 10, category: 'Игры' },
+    { name: 'Food Hunt', amount: 2, category: 'Игры' },
+    { name: 'Romance Club', amount: 15, category: 'Подписки' },
+  ] }]);
+});
+
+test('resending a saved App Store receipt reports a newly matched Apple charge', async () => {
+  const { bot, sent } = createHarness({
+    saveAppStore: async () => ({ added: 0, total: 23.98, removedApple: 1, duplicate: true }),
+  });
+  await bot.handleUpdate(callbackUpdate('app-store:add', 101));
+  await bot.handleUpdate(messageUpdate({ content: { text: '14.09.2026' }, updateId: 102 }));
+  await bot.handleUpdate(messageUpdate({ content: { text: 'Music – $23.98' }, updateId: 103 }));
+  assert.match(sent.at(-1)[1], /уже внесён/);
+  assert.match(sent.at(-1)[1], /Списание Apple заменено/);
+  assert.deepEqual(sent.at(-1)[2].link_preview_options, { is_disabled: true });
 });
 
 test('cash expense asks for an amount and category, then saves EUR expense', async () => {
