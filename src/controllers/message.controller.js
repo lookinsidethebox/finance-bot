@@ -21,6 +21,9 @@ const {
 
 const MAX_STATEMENT_SIZE = 10 * 1024 * 1024;
 const MAX_REPORT_MESSAGE_LENGTH = 3900;
+const podgoricaDateFormatter = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Europe/Podgorica', day: '2-digit', month: '2-digit', year: 'numeric',
+});
 const statisticsReplyOptions = {
   parse_mode: 'HTML',
   link_preview_options: { is_disabled: true },
@@ -95,6 +98,13 @@ function parseCashAmount(text) {
   return Number.isSafeInteger(cents) && cents > 0 ? cents / 100 : null;
 }
 
+function reportDateExamples(date) {
+  const parts = Object.fromEntries(podgoricaDateFormatter.formatToParts(date)
+    .filter(({ type }) => type !== 'literal').map(({ type, value }) => [type, value]));
+  return { start: `01.${parts.month}.${parts.year}`,
+    end: `${parts.day}.${parts.month}.${parts.year}` };
+}
+
 async function downloadStatement(context, document) {
   if (document.file_size > MAX_STATEMENT_SIZE) {
     throw new StatementError('Файл слишком большой: максимум 10 МБ.');
@@ -128,6 +138,7 @@ function registerMessageController(bot, {
   selectCurrency = setCashCurrency,
   createCurrency = addCustomCurrency,
   readTransactions = loadTransactions,
+  now = () => new Date(),
 } = {}) {
   const state = new Map();
 
@@ -289,7 +300,7 @@ function registerMessageController(bot, {
       const category = pending.categories[Number(indexText)];
       if (!category) return;
       state.set(chatId, { step: 'category-report-start', category, scope: pending.scope });
-      await context.reply(`С какой даты показать траты в категории «${category}»? Напишите дату в формате ДД.ММ.ГГГГ, например 01.09.2026. Для отмены отправьте /cancel.`);
+      await context.reply(`С какой даты показать траты в категории «${category}»? Напишите дату в формате ДД.ММ.ГГГГ, например ${reportDateExamples(now()).start}. Для отмены отправьте /cancel.`);
     } else if (action === 'stats:mine' || action === 'stats:all') {
       try {
         await startStatistics(context, action.slice('stats:'.length));
@@ -430,10 +441,11 @@ function registerMessageController(bot, {
       } else {
         const date = parseReportDate(input);
         if (!date) {
-          await context.reply('Напишите существующую дату в формате ДД.ММ.ГГГГ, например 01.09.2026.');
+          const example = reportDateExamples(now())[pending.step === 'category-report-start' ? 'start' : 'end'];
+          await context.reply(`Напишите существующую дату в формате ДД.ММ.ГГГГ, например ${example}.`);
         } else if (pending.step === 'category-report-start') {
           state.set(chatId, { ...pending, step: 'category-report-end', start: date });
-          await context.reply('По какую дату включительно показать траты? Напишите дату в формате ДД.ММ.ГГГГ.');
+          await context.reply(`По какую дату включительно показать траты? Напишите дату в формате ДД.ММ.ГГГГ, например ${reportDateExamples(now()).end}.`);
         } else if (date < pending.start) {
           await context.reply('Дата окончания должна быть не раньше даты начала. Напишите дату окончания ещё раз.');
         } else {

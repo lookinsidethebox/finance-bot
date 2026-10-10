@@ -5,6 +5,7 @@ const path = require('node:path');
 const test = require('node:test');
 const XLSX = require('xlsx');
 const { parseHipotekarnaStatement } = require('../src/importers/hipotekarna');
+const { categoryButtonLabel } = require('../src/constants/categories');
 const {
   processStatement, learnCategory, excludeDescription, descriptionKey, addCategory, listCategories,
 } = require('../src/services/transaction-store');
@@ -166,6 +167,29 @@ test('custom category is persisted, capitalized and usable for learned rules', a
     ], options);
     assert.equal(result.added, 1);
     assert.equal(JSON.parse(await fs.readFile(options.file, 'utf8')).transactions[0].category, 'Хобби');
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('promoted categories have icons and appear once alongside old custom data', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'finance-bot-'));
+  try {
+    const categoriesFile = path.join(directory, 'custom-categories.json');
+    await fs.writeFile(categoriesFile, JSON.stringify({
+      categories: ['Комиссии', 'Хостинги', 'Крипта', 'Одежда и обувь', 'Хобби'],
+    }));
+    const categories = await listCategories({ categoriesFile });
+    for (const [name, icon] of [
+      ['Комиссии', '💸'], ['Хостинги', '🖥️'], ['Крипта', '💰'], ['Одежда и обувь', '👗'],
+    ]) {
+      assert.equal(categories.filter((category) => category === name).length, 1);
+      assert.equal(categoryButtonLabel(name), `${icon} ${name}`);
+      assert.deepEqual(await addCategory(name.toLowerCase(), { categoriesFile }),
+        { category: name, added: false });
+    }
+    assert.equal(categories.includes('Хобби'), true);
+    assert.equal(categoryButtonLabel('Хобби'), '🏷️ Хобби');
   } finally {
     await fs.rm(directory, { recursive: true, force: true });
   }

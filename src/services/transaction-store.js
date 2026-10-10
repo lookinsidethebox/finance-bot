@@ -98,7 +98,7 @@ async function writeJson(file, value) {
 async function listCategories({ categoriesFile = DEFAULT_CATEGORIES_FILE } = {}) {
   const stored = await readJson(categoriesFile, { categories: [] });
   if (!Array.isArray(stored.categories)) throw new Error('Некорректный файл категорий.');
-  return [...CATEGORIES, ...stored.categories];
+  return [...new Set([...CATEGORIES, ...stored.categories])];
 }
 
 function normalizeCategoryName(name) {

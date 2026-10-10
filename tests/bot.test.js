@@ -115,7 +115,7 @@ test('accepts a second owner and records their Telegram ID on expenses', async (
   await bot.handleUpdate(callbackUpdate('cash:add', 101, 456));
   await bot.handleUpdate(messageUpdate({ fromId: 456, content: { text: '5' }, updateId: 102 }));
   const button = sent.at(-1)[2].reply_markup.inline_keyboard.flat()
-    .find((item) => item.text === '🛍️ Продуктовые магазины');
+    .find((item) => item.text === '🥬 Продуктовые магазины');
   await bot.handleUpdate(callbackUpdate(button.callback_data, 103, 456));
   assert.deepEqual(saved, [{ amount: 5, category: 'Продуктовые магазины', owner: 456 }]);
   const count = sent.length;
@@ -240,6 +240,7 @@ test('category report asks for a category, then both dates and shows only matchi
   const { bot, sent, edited } = createHarness({
     readTransactions: async () => transactions,
     categories: async () => [...CATEGORIES, 'Крипта'],
+    now: () => new Date('2026-10-10T23:30:00.000Z'),
   }, ['123', '456']);
   await bot.handleUpdate(messageUpdate());
   assert.deepEqual(sent[0][2].reply_markup.inline_keyboard.slice(4).map((row) => row[0].callback_data),
@@ -247,18 +248,23 @@ test('category report asks for a category, then both dates and shows only matchi
   await bot.handleUpdate(callbackUpdate('category-report:mine', 101));
   assert.match(sent.at(-1)[1], /По какой категории/);
   const buttons = sent.at(-1)[2].reply_markup.inline_keyboard.flat();
-  assert.ok(buttons.find((button) => button.text === '🏷️ Крипта'));
+  assert.ok(buttons.find((button) => button.text === '💰 Крипта'));
   const games = buttons.find((button) => button.text === '🎮 Игры');
   await bot.handleUpdate(callbackUpdate(games.callback_data, 102));
   assert.equal(edited.length, 2);
   assert.match(sent.at(-1)[1], /С какой даты/);
+  assert.match(sent.at(-1)[1], /например 01\.10\.2026/);
   await bot.handleUpdate(messageUpdate({ content: { text: '31.09.2026' }, updateId: 103 }));
   assert.match(sent.at(-1)[1], /существующую дату/);
+  assert.match(sent.at(-1)[1], /например 01\.10\.2026/);
   await bot.handleUpdate(messageUpdate({ content: { text: '01.09.2026' }, updateId: 104 }));
   assert.match(sent.at(-1)[1], /По какую дату включительно/);
-  await bot.handleUpdate(messageUpdate({ content: { text: '31.08.2026' }, updateId: 105 }));
+  assert.match(sent.at(-1)[1], /например 11\.10\.2026/);
+  await bot.handleUpdate(messageUpdate({ content: { text: '31.09.2026' }, updateId: 105 }));
+  assert.match(sent.at(-1)[1], /например 11\.10\.2026/);
+  await bot.handleUpdate(messageUpdate({ content: { text: '31.08.2026' }, updateId: 106 }));
   assert.match(sent.at(-1)[1], /не раньше даты начала/);
-  await bot.handleUpdate(messageUpdate({ content: { text: '30.09.2026' }, updateId: 106 }));
+  await bot.handleUpdate(messageUpdate({ content: { text: '30.09.2026' }, updateId: 107 }));
   const [text, options] = sent.at(-1).slice(1);
   assert.match(text, /First/);
   assert.match(text, /Last/);
@@ -318,7 +324,7 @@ test('cash expense asks for an amount and category, then saves EUR expense', asy
   await bot.handleUpdate(messageUpdate({ content: { text: '12,50' }, updateId: 102 }));
   assert.match(sent.at(-1)[1], /12\.50 EUR/);
   const button = sent.at(-1)[2].reply_markup.inline_keyboard.flat()
-    .find((item) => item.text === '🛍️ Продуктовые магазины');
+    .find((item) => item.text === '🥬 Продуктовые магазины');
   await bot.handleUpdate(callbackUpdate(button.callback_data, 103));
   assert.deepEqual(saved, [{ amount: 12.5, category: 'Продуктовые магазины', owner: ownerId }]);
   assert.match(sent.at(-1)[1], /Записала наличную трату 12\.50 EUR/);
@@ -454,9 +460,9 @@ test('Hipotekarna file asks for a category and learns the answer', async () => {
   assert.equal(buttons.length, CATEGORIES.length + 2);
   assert.equal(buttons.at(-2).text, '➕ Новая категория');
   assert.equal(buttons.at(-1).text, '🚫 Не учитывать');
-  assert.equal(buttons.find((button) => button.text === '🛍️ Продуктовые магазины') !== undefined, true);
+  assert.equal(buttons.find((button) => button.text === '🥬 Продуктовые магазины') !== undefined, true);
   assert.equal(buttons.find((button) => button.text === '🏠 Коммуналка и т.п.') !== undefined, true);
-  await bot.handleUpdate(callbackUpdate(buttons.find((button) => button.text === '🛍️ Продуктовые магазины').callback_data, 102));
+  await bot.handleUpdate(callbackUpdate(buttons.find((button) => button.text === '🥬 Продуктовые магазины').callback_data, 102));
   assert.deepEqual(learned, { bank: 'hipotekarna', description: 'Shop', category: 'Продуктовые магазины' });
   assert.match(sent.at(-1)[1], /новых 1/);
 });

@@ -89,6 +89,8 @@ test('sums by currency and category and ranks nominal amounts without conversion
   const text = formatMonthlyStatistics(mine, 'mine');
   assert.match(text.summary, /<b>📊 Мои траты · сентябрь 2026<\/b>/);
   assert.match(text.summary, /<b>💰 Всего<\/b>/);
+  assert.match(text.summary, /<b>По категориям<\/b>/);
+  assert.doesNotMatch(text.summary, /🗂 По категориям/);
   assert.match(text.summary, /Аптека — <b>50,30 €<\/b>/);
   assert.match(text.summary, /Игры — <b>0,00 €<\/b> \(<b>120,00 \$<\/b>\)/);
   assert.doesNotMatch(text.summary, /Прочее/);

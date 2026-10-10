@@ -170,7 +170,7 @@ function formatMonthlyStatistics(report, scope) {
     return `${escapeHtml(categoryButtonLabel(category))} — ${primary}${additional.length ? ` (${additional.join(' · ')})` : ''}`;
   });
   const summary = [heading, '', bold('💰 Всего'), ...totals,
-    '', bold('🗂 По категориям'), ...categories].join('\n');
+    '', bold('По категориям'), ...categories].join('\n');
   const top = [bold('🏆 10 крупнейших транзакций'), ...report.top.map((transaction, index) => {
     const date = transaction.date.slice(0, 10);
     const readableDate = `${date.slice(8, 10)}.${date.slice(5, 7)}.${date.slice(0, 4)}`;
