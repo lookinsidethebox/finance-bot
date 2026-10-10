@@ -7,10 +7,10 @@ const { CURRENCIES } = require('../src/services/transaction-store');
 
 const ownerId = 123;
 
-function createHarness(services) {
+function createHarness(services, ownerIds = [String(ownerId)]) {
   const sent = [];
   const edited = [];
-  const bot = createBot({ token: 'test-token', ownerId: String(ownerId) }, {
+  const bot = createBot({ token: 'test-token', ownerIds }, {
     categories: async () => CATEGORIES,
     currencies: async () => CURRENCIES,
     cashCurrency: async () => 'EUR',
@@ -40,16 +40,16 @@ function statementBuffer() {
   return XLSX.write(workbook, { bookType: 'biff8', type: 'buffer' });
 }
 
-function callbackUpdate(data, updateId = 100) {
+function callbackUpdate(data, updateId = 100, fromId = ownerId) {
   return {
     update_id: updateId,
     callback_query: {
       id: String(updateId),
-      from: { id: ownerId, is_bot: false, first_name: 'Test' },
+      from: { id: fromId, is_bot: false, first_name: 'Test' },
       message: {
         message_id: 1,
         date: 1_780_000_000,
-        chat: { id: ownerId, type: 'private' },
+        chat: { id: fromId, type: 'private' },
       },
       chat_instance: 'test',
       data,
@@ -93,6 +93,28 @@ test('silently ignores other users, groups, and messages without a sender', asyn
   delete noSender.message.from;
   await bot.handleUpdate(noSender);
   assert.deepEqual(sent, []);
+});
+
+test('accepts a second owner and records their Telegram ID on expenses', async () => {
+  const saved = [];
+  const { bot, sent } = createHarness({
+    saveCash: async (amount, category, options) => {
+      saved.push({ amount, category, owner: options.owner });
+      return { amount, category, currency: 'EUR' };
+    },
+  }, ['123', '456']);
+  await bot.handleUpdate(messageUpdate({ fromId: 456 }));
+  assert.equal(sent.at(-1)[0], 456);
+  await bot.handleUpdate(callbackUpdate('cash:add', 101, 456));
+  await bot.handleUpdate(messageUpdate({ fromId: 456, content: { text: '5' }, updateId: 102 }));
+  const button = sent.at(-1)[2].reply_markup.inline_keyboard.flat()
+    .find((item) => item.text === '🛍️ Магазины');
+  await bot.handleUpdate(callbackUpdate(button.callback_data, 103, 456));
+  assert.deepEqual(saved, [{ amount: 5, category: 'Магазины', owner: 456 }]);
+  const count = sent.length;
+  await bot.handleUpdate(messageUpdate({ fromId: 789, updateId: 104 }));
+  await bot.handleUpdate(messageUpdate({ fromId: 456, chatId: -100123, chatType: 'supergroup', updateId: 105 }));
+  assert.equal(sent.length, count);
 });
 
 test('statement button opens bank selection and Hipotekarna asks for a file', async () => {

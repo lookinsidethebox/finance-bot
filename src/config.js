@@ -1,14 +1,17 @@
 function loadConfig(env = process.env) {
   const token = env.BOT_TOKEN?.trim();
-  const ownerId = env.OWNER_ID?.trim();
+  const ownerIdsValue = env.OWNER_IDS?.trim();
 
   if (!token) throw new Error('BOT_TOKEN is missing. Add it to .env.');
-  if (!ownerId) throw new Error('OWNER_ID is missing. Add it to .env.');
-  if (!/^[1-9]\d*$/.test(ownerId) || !Number.isSafeInteger(Number(ownerId))) {
-    throw new Error('OWNER_ID must be a positive numeric Telegram user ID.');
+  if (!ownerIdsValue) throw new Error('OWNER_IDS is missing. Add it to .env.');
+
+  const ownerIds = ownerIdsValue.split(',').map((id) => id.trim());
+  if (ownerIds.some((id) => !/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id)))
+    || new Set(ownerIds).size !== ownerIds.length) {
+    throw new Error('OWNER_IDS must contain unique, positive numeric Telegram user IDs separated by commas.');
   }
 
-  return { token, ownerId };
+  return { token, ownerIds };
 }
 
 module.exports = { loadConfig };
