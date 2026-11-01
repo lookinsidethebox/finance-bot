@@ -6,6 +6,7 @@ const path = require('node:path');
 const {
   loadTransactions, availableYears, availableMonths, monthlyStatistics, formatMonthlyStatistics,
   parseReportDate, categoryExpenses, formatCategoryExpenses,
+  categoryAverages, formatCategoryAverages,
 } = require('../src/services/statistics.service');
 
 function expense(date, amount, currency, category, description, owner = 123) {
@@ -65,6 +66,40 @@ test('finds years and months separately for one owner and everyone', () => {
   assert.deepEqual(availableYears(transactions), ['2026', '2027']);
   assert.deepEqual(availableMonths(transactions, '2026', 123), ['09']);
   assert.deepEqual(availableMonths(transactions, '2026'), ['09', '10']);
+});
+
+test('averages each populated category over calendar months, owner, and currency', () => {
+  const transactions = [
+    expense('2026-01-01', 1.00, 'EUR', 'Аптека', 'A'),
+    expense('2026-09-01', 2.00, 'EUR', 'Аптека', 'B'),
+    expense('2026-10-01', 7.00, 'USD', 'Аптека', 'C'),
+    expense('2026-10-02', 9.00, 'EUR', 'Аптека', 'D', 456),
+    expense('2026-10-03', 3.33, 'EUR', 'Игры', 'E'),
+    expense('2026-10-04', 3.34, 'EUR', 'Игры', 'F'),
+    expense('2026-10-05', 5.00, 'EUR', '<Хобби&>', 'G', 456),
+  ];
+  const mine = categoryAverages(transactions, { owner: 123 });
+  assert.deepEqual(mine.categories.map(([category]) => category), ['Аптека', 'Игры']);
+  assert.equal(mine.categories[0][1].get('EUR'), 300);
+  assert.equal(mine.monthCount, 10);
+  assert.equal(mine.startMonth, '2026-01');
+  assert.equal(mine.endMonth, '2026-10');
+  const mineText = formatCategoryAverages(mine)[0];
+  assert.match(mineText, /В среднем за календарный месяц · январь 2026 – октябрь 2026 \(10 мес\., включая месяцы без трат\)/);
+  assert.match(mineText, /Аптека — <b>0,30 €<\/b> \+ <b>0,70 \$<\/b>/);
+  assert.match(mineText, /Игры — <b>0,67 €<\/b>/);
+  const sharedText = formatCategoryAverages(categoryAverages(transactions), { scope: 'all' })[0];
+  assert.match(sharedText, /Общие средние траты/);
+  assert.match(sharedText, /Аптека — <b>1,20 €<\/b>/);
+  assert.match(sharedText, /&lt;Хобби&amp;&gt;/);
+  assert.doesNotMatch(sharedText, /<Хобби&>/);
+  assert.match(formatCategoryAverages(categoryAverages([], { owner: 123 }))[0], /Трат пока нет/);
+  const acrossYear = categoryAverages([
+    expense('2025-12-31', 10, 'EUR', 'Аптека', 'A'),
+    expense('2026-02-01', 10, 'EUR', 'Игры', 'B'),
+  ]);
+  assert.equal(acrossYear.monthCount, 3);
+  assert.match(formatCategoryAverages(acrossYear)[0], /Аптека — <b>3,33 €<\/b>/);
 });
 
 test('sums by currency and category and ranks nominal amounts without conversion', () => {

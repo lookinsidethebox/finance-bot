@@ -178,7 +178,55 @@ function formatMonthlyStatistics(report, scope) {
   return { summary, top };
 }
 
+function categoryAverages(transactions, { owner } = {}) {
+  const categories = new Map();
+  let startMonth;
+  let endMonth;
+  for (const transaction of transactions) {
+    if (!matchesOwner(transaction, owner)) continue;
+    const month = transaction.date?.slice(0, 7);
+    if (!/^\d{4}-(?:0[1-9]|1[0-2])$/.test(month)) continue;
+    if (!startMonth || month < startMonth) startMonth = month;
+    if (!endMonth || month > endMonth) endMonth = month;
+    const cents = Math.round(transaction.amount * 100);
+    if (!categories.has(transaction.category)) categories.set(transaction.category, new Map());
+    const amounts = categories.get(transaction.category);
+    amounts.set(transaction.currency, (amounts.get(transaction.currency) || 0) + cents);
+  }
+  const monthCount = startMonth
+    ? (Number(endMonth.slice(0, 4)) - Number(startMonth.slice(0, 4))) * 12
+      + Number(endMonth.slice(5, 7)) - Number(startMonth.slice(5, 7)) + 1
+    : 0;
+  return {
+    categories: [...categories].sort(([a], [b]) => a.localeCompare(b, 'ru')),
+    startMonth, endMonth, monthCount,
+  };
+}
+
+function formatCategoryAverages(report, { scope = 'mine', maxLength = 3900 } = {}) {
+  const title = scope === 'all' ? 'Общие средние траты' : 'Мои средние траты';
+  if (!report.monthCount) return [`${bold(title)}\n\nТрат пока нет.`];
+  const monthText = (month) => `${MONTH_NAMES[Number(month.slice(5, 7)) - 1]} ${month.slice(0, 4)}`;
+  const header = `${bold(title)}\nВ среднем за календарный месяц · ${monthText(report.startMonth)} – ${monthText(report.endMonth)} (${report.monthCount} мес., включая месяцы без трат).`;
+  const messages = [header];
+  for (const [category, amounts] of report.categories) {
+    const values = sortedCurrencies(amounts.keys()).map((currency) => {
+      const totalCents = amounts.get(currency);
+      return bold(amountText(Math.round(totalCents / report.monthCount), currency));
+    });
+    const line = `${escapeHtml(categoryButtonLabel(category))} — ${values.join(' + ')}`;
+    const last = messages.length - 1;
+    if (messages[last].length + line.length + 1 <= maxLength) {
+      messages[last] += `\n${line}`;
+    } else {
+      messages.push(line);
+    }
+  }
+  return messages;
+}
+
 module.exports = {
   loadTransactions, availableYears, availableMonths, monthlyStatistics,
-  formatMonthlyStatistics, parseReportDate, categoryExpenses, formatCategoryExpenses, MONTH_NAMES,
+  formatMonthlyStatistics, parseReportDate, categoryExpenses, formatCategoryExpenses,
+  categoryAverages, formatCategoryAverages, MONTH_NAMES,
 };

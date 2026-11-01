@@ -17,7 +17,8 @@ const {
 const { categoryButtonLabel } = require('../constants/categories');
 const {
   loadTransactions, availableYears, availableMonths, monthlyStatistics,
-  formatMonthlyStatistics, parseReportDate, categoryExpenses, formatCategoryExpenses, MONTH_NAMES,
+  formatMonthlyStatistics, parseReportDate, categoryExpenses, formatCategoryExpenses,
+  categoryAverages, formatCategoryAverages, MONTH_NAMES,
 } = require('../services/statistics.service');
 
 const MAX_STATEMENT_SIZE = 10 * 1024 * 1024;
@@ -40,6 +41,8 @@ const mainButtons = {
     [{ text: '🍎 Внести траты на App Store', callback_data: 'app-store:add' }],
     [{ text: '📊 Вывести мою статистику', callback_data: 'stats:mine' }],
     [{ text: '📈 Вывести общую статистику', callback_data: 'stats:all' }],
+    [{ text: '📉 Мои средние траты', callback_data: 'averages:mine' }],
+    [{ text: '📉 Общие средние траты', callback_data: 'averages:all' }],
     [{ text: '🗂 Мои траты по категории', callback_data: 'category-report:mine' }],
     [{ text: '👥 Общие траты по категории', callback_data: 'category-report:all' }],
   ] },
@@ -233,6 +236,21 @@ function registerMessageController(bot, {
     }
   }
 
+  async function showAverages(context, scope) {
+    const transactions = await readTransactions();
+    const report = categoryAverages(transactions,
+      { owner: scope === 'mine' ? context.from.id : undefined });
+    const messages = formatCategoryAverages(report,
+      { scope, maxLength: MAX_REPORT_MESSAGE_LENGTH });
+    state.delete(context.chat.id);
+    for (const [index, message] of messages.entries()) {
+      await context.reply(message, {
+        ...statisticsReplyOptions,
+        ...(index === messages.length - 1 ? mainButtons : {}),
+      });
+    }
+  }
+
   async function chooseStatisticsYear(context, scope, year) {
     const transactions = await readTransactions();
     const owner = scope === 'mine' ? context.from.id : undefined;
@@ -325,7 +343,8 @@ function registerMessageController(bot, {
     const action = context.callbackQuery.data;
     if (!action?.startsWith('statement:') && !action?.startsWith('cash:')
       && !action?.startsWith('currency:') && !action?.startsWith('stats:')
-      && !action?.startsWith('category-report:') && !action?.startsWith('app-store:')) return;
+      && !action?.startsWith('category-report:') && !action?.startsWith('app-store:')
+      && !action?.startsWith('averages:')) return;
     await context.answerCbQuery();
     try {
       await context.editMessageReplyMarkup();
@@ -334,7 +353,14 @@ function registerMessageController(bot, {
     }
     const chatId = context.chat.id;
 
-    if (action === 'category-report:mine' || action === 'category-report:all') {
+    if (action === 'averages:mine' || action === 'averages:all') {
+      try {
+        await showAverages(context, action.slice('averages:'.length));
+      } catch {
+        state.delete(chatId);
+        await context.reply('Не удалось посчитать средние траты.', mainButtons);
+      }
+    } else if (action === 'category-report:mine' || action === 'category-report:all') {
       try {
         await startCategoryReport(context, action.slice('category-report:'.length));
       } catch {

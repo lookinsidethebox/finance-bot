@@ -196,6 +196,25 @@ test('statistics asks for a year only when multiple years have transactions', as
   assert.doesNotMatch(sent.at(-1)[1], /New/);
 });
 
+test('average buttons report each owner and shared history without month selection', async () => {
+  const transactions = [
+    { date: '2026-01-01', amount: 10, currency: 'EUR', category: 'Аптека', owner: 123 },
+    { date: '2026-10-01', amount: 20, currency: 'EUR', category: 'Аптека', owner: 123 },
+    { date: '2026-10-01', amount: 30, currency: 'EUR', category: 'Аптека', owner: 456 },
+  ];
+  const { bot, sent } = createHarness({ readTransactions: async () => transactions }, ['123', '456']);
+  await bot.handleUpdate(messageUpdate());
+  assert.deepEqual(sent[0][2].reply_markup.inline_keyboard.slice(5, 7)
+    .map((row) => row[0].callback_data), ['averages:mine', 'averages:all']);
+  await bot.handleUpdate(callbackUpdate('averages:mine', 101));
+  assert.match(sent.at(-1)[1], /Аптека — <b>3,00 €<\/b>/);
+  assert.match(sent.at(-1)[1], /январь 2026 – октябрь 2026 \(10 мес\./);
+  assert.equal(sent.at(-1)[2].parse_mode, 'HTML');
+  await bot.handleUpdate(callbackUpdate('averages:all', 102));
+  assert.match(sent.at(-1)[1], /Аптека — <b>6,00 €<\/b>/);
+  assert.equal(sent.at(-1)[2].reply_markup.inline_keyboard[6][0].callback_data, 'averages:all');
+});
+
 test('statistics reports an empty personal history', async () => {
   const transactions = [
     { date: '2026-09-10', amount: 12, currency: 'EUR', category: 'Аптека', description: 'Other', owner: 456 },
@@ -244,7 +263,7 @@ test('category report asks for a category, then both dates and shows only matchi
     now: () => new Date('2026-10-10T23:30:00.000Z'),
   }, ['123', '456']);
   await bot.handleUpdate(messageUpdate());
-  assert.deepEqual(sent[0][2].reply_markup.inline_keyboard.slice(5).map((row) => row[0].callback_data),
+  assert.deepEqual(sent[0][2].reply_markup.inline_keyboard.slice(7).map((row) => row[0].callback_data),
     ['category-report:mine', 'category-report:all']);
   await bot.handleUpdate(callbackUpdate('category-report:mine', 101));
   assert.match(sent.at(-1)[1], /По какой категории/);
@@ -283,7 +302,7 @@ test('category report asks for a category, then both dates and shows only matchi
   assert.match(text, /10,00 \$/);
   assert.equal(options.parse_mode, 'HTML');
   assert.deepEqual(options.link_preview_options, { is_disabled: true });
-  assert.equal(options.reply_markup.inline_keyboard[5][0].callback_data, 'category-report:mine');
+  assert.equal(options.reply_markup.inline_keyboard[7][0].callback_data, 'category-report:mine');
 });
 
 test('shared category report includes expenses of every owner', async () => {
