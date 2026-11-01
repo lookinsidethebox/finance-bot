@@ -209,8 +209,8 @@ test('average buttons report each owner and shared history without month selecti
   assert.deepEqual(sent[0][2].reply_markup.inline_keyboard.slice(5, 7)
     .map((row) => row[0].callback_data), ['averages:mine', 'averages:all']);
   await bot.handleUpdate(callbackUpdate('averages:mine', 101));
-  assert.match(sent.at(-1)[1], /Аптека — <b>3,00 €<\/b>/);
-  assert.match(sent.at(-1)[1], /январь 2026 – октябрь 2026 \(10 мес\./);
+  assert.match(sent.at(-1)[1], /Аптека — <b>20,00 €<\/b>/);
+  assert.match(sent.at(-1)[1], /октябрь 2026 – октябрь 2026 \(1 мес\./);
   assert.equal(sent.at(-1)[2].parse_mode, 'HTML');
   await bot.handleUpdate(callbackUpdate('averages:all', 102));
   assert.match(sent.at(-1)[1], /Аптека — <b>30,00 €<\/b>/);
