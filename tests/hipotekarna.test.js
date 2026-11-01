@@ -177,11 +177,13 @@ test('promoted categories have icons and appear once alongside old custom data',
   try {
     const categoriesFile = path.join(directory, 'custom-categories.json');
     await fs.writeFile(categoriesFile, JSON.stringify({
-      categories: ['Комиссии', 'Хостинги', 'Крипта', 'Одежда и обувь', 'Хобби'],
+      categories: ['Комиссии', 'Хостинги', 'Крипта', 'Одежда и обувь',
+        'Уборка', 'Медицина', 'Техника', 'Хобби'],
     }));
     const categories = await listCategories({ categoriesFile });
     for (const [name, icon] of [
       ['Комиссии', '💸'], ['Хостинги', '🖥️'], ['Крипта', '💰'], ['Одежда и обувь', '👗'],
+      ['Уборка', '🧹'], ['Медицина', '🩺'], ['Техника', '💻'],
     ]) {
       assert.equal(categories.filter((category) => category === name).length, 1);
       assert.equal(categoryButtonLabel(name), `${icon} ${name}`);

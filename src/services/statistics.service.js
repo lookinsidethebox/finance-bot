@@ -207,7 +207,7 @@ function formatCategoryAverages(report, { scope = 'mine', maxLength = 3900 } = {
   const title = scope === 'all' ? 'Общие средние траты' : 'Мои средние траты';
   if (!report.monthCount) return [`${bold(title)}\n\nТрат пока нет.`];
   const monthText = (month) => `${MONTH_NAMES[Number(month.slice(5, 7)) - 1]} ${month.slice(0, 4)}`;
-  const header = `${bold(title)}\nВ среднем за календарный месяц · ${monthText(report.startMonth)} – ${monthText(report.endMonth)} (${report.monthCount} мес., включая месяцы без трат).`;
+  const header = `${bold(title)}\n\nВ среднем за календарный месяц · ${monthText(report.startMonth)} – ${monthText(report.endMonth)} (${report.monthCount} мес., включая месяцы без трат).`;
   const messages = [header];
   for (const [category, amounts] of report.categories) {
     const values = sortedCurrencies(amounts.keys()).map((currency) => {
@@ -216,8 +216,9 @@ function formatCategoryAverages(report, { scope = 'mine', maxLength = 3900 } = {
     });
     const line = `${escapeHtml(categoryButtonLabel(category))} — ${values.join(' + ')}`;
     const last = messages.length - 1;
-    if (messages[last].length + line.length + 1 <= maxLength) {
-      messages[last] += `\n${line}`;
+    const separator = last === 0 && messages[0] === header ? '\n\n' : '\n';
+    if (messages[last].length + line.length + separator.length <= maxLength) {
+      messages[last] += `${separator}${line}`;
     } else {
       messages.push(line);
     }

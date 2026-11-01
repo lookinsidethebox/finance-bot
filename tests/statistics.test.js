@@ -85,6 +85,7 @@ test('averages each populated category over calendar months, owner, and currency
   assert.equal(mine.startMonth, '2026-01');
   assert.equal(mine.endMonth, '2026-10');
   const mineText = formatCategoryAverages(mine)[0];
+  assert.match(mineText, /^<b>Мои средние траты<\/b>\n\nВ среднем за календарный месяц ·[^\n]+\n\n💊 Аптека/);
   assert.match(mineText, /В среднем за календарный месяц · январь 2026 – октябрь 2026 \(10 мес\., включая месяцы без трат\)/);
   assert.match(mineText, /Аптека — <b>0,30 €<\/b> \+ <b>0,70 \$<\/b>/);
   assert.match(mineText, /Игры — <b>0,67 €<\/b>/);
