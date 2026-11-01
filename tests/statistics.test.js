@@ -101,6 +101,17 @@ test('averages each populated category over calendar months, owner, and currency
   ]);
   assert.equal(acrossYear.monthCount, 3);
   assert.match(formatCategoryAverages(acrossYear)[0], /Аптека — <b>3,33 €<\/b>/);
+  const sharedFromOctober = categoryAverages(transactions, { fromMonth: '2026-10' });
+  assert.equal(sharedFromOctober.startMonth, '2026-10');
+  assert.equal(sharedFromOctober.monthCount, 1);
+  assert.equal(sharedFromOctober.categories.find(([name]) => name === 'Аптека')[1].get('EUR'), 900);
+  assert.match(formatCategoryAverages(sharedFromOctober, { scope: 'all' })[0],
+    /Аптека — <b>9,00 €<\/b> \+ <b>7,00 \$<\/b>/);
+  const noRecordedOctober = categoryAverages([
+    expense('2026-11-01', 10, 'EUR', 'Игры', 'Only November'),
+  ], { fromMonth: '2026-10' });
+  assert.equal(noRecordedOctober.monthCount, 2);
+  assert.match(formatCategoryAverages(noRecordedOctober)[0], /Игры — <b>5,00 €<\/b>/);
 });
 
 test('sums by currency and category and ranks nominal amounts without conversion', () => {

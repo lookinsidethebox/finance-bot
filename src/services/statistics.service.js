@@ -178,14 +178,15 @@ function formatMonthlyStatistics(report, scope) {
   return { summary, top };
 }
 
-function categoryAverages(transactions, { owner } = {}) {
+function categoryAverages(transactions, { owner, fromMonth } = {}) {
   const categories = new Map();
-  let startMonth;
+  let startMonth = fromMonth;
   let endMonth;
   for (const transaction of transactions) {
     if (!matchesOwner(transaction, owner)) continue;
     const month = transaction.date?.slice(0, 7);
     if (!/^\d{4}-(?:0[1-9]|1[0-2])$/.test(month)) continue;
+    if (fromMonth && month < fromMonth) continue;
     if (!startMonth || month < startMonth) startMonth = month;
     if (!endMonth || month > endMonth) endMonth = month;
     const cents = Math.round(transaction.amount * 100);
@@ -193,7 +194,7 @@ function categoryAverages(transactions, { owner } = {}) {
     const amounts = categories.get(transaction.category);
     amounts.set(transaction.currency, (amounts.get(transaction.currency) || 0) + cents);
   }
-  const monthCount = startMonth
+  const monthCount = endMonth
     ? (Number(endMonth.slice(0, 4)) - Number(startMonth.slice(0, 4))) * 12
       + Number(endMonth.slice(5, 7)) - Number(startMonth.slice(5, 7)) + 1
     : 0;

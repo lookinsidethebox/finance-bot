@@ -23,6 +23,7 @@ const {
 
 const MAX_STATEMENT_SIZE = 10 * 1024 * 1024;
 const MAX_REPORT_MESSAGE_LENGTH = 3900;
+const SHARED_AVERAGES_START_MONTH = '2026-10';
 const podgoricaDateFormatter = new Intl.DateTimeFormat('en-GB', {
   timeZone: 'Europe/Podgorica', day: '2-digit', month: '2-digit', year: 'numeric',
 });
@@ -239,7 +240,8 @@ function registerMessageController(bot, {
   async function showAverages(context, scope) {
     const transactions = await readTransactions();
     const report = categoryAverages(transactions,
-      { owner: scope === 'mine' ? context.from.id : undefined });
+      { owner: scope === 'mine' ? context.from.id : undefined,
+        fromMonth: scope === 'all' ? SHARED_AVERAGES_START_MONTH : undefined });
     const messages = formatCategoryAverages(report,
       { scope, maxLength: MAX_REPORT_MESSAGE_LENGTH });
     state.delete(context.chat.id);

@@ -199,8 +199,10 @@ test('statistics asks for a year only when multiple years have transactions', as
 test('average buttons report each owner and shared history without month selection', async () => {
   const transactions = [
     { date: '2026-01-01', amount: 10, currency: 'EUR', category: 'Аптека', owner: 123 },
+    { date: '2026-09-01', amount: 100, currency: 'EUR', category: 'Игры', owner: 456 },
     { date: '2026-10-01', amount: 20, currency: 'EUR', category: 'Аптека', owner: 123 },
     { date: '2026-10-01', amount: 30, currency: 'EUR', category: 'Аптека', owner: 456 },
+    { date: '2026-11-01', amount: 10, currency: 'EUR', category: 'Аптека', owner: 456 },
   ];
   const { bot, sent } = createHarness({ readTransactions: async () => transactions }, ['123', '456']);
   await bot.handleUpdate(messageUpdate());
@@ -211,7 +213,9 @@ test('average buttons report each owner and shared history without month selecti
   assert.match(sent.at(-1)[1], /январь 2026 – октябрь 2026 \(10 мес\./);
   assert.equal(sent.at(-1)[2].parse_mode, 'HTML');
   await bot.handleUpdate(callbackUpdate('averages:all', 102));
-  assert.match(sent.at(-1)[1], /Аптека — <b>6,00 €<\/b>/);
+  assert.match(sent.at(-1)[1], /Аптека — <b>30,00 €<\/b>/);
+  assert.match(sent.at(-1)[1], /октябрь 2026 – ноябрь 2026 \(2 мес\./);
+  assert.doesNotMatch(sent.at(-1)[1], /Игры/);
   assert.equal(sent.at(-1)[2].reply_markup.inline_keyboard[6][0].callback_data, 'averages:all');
 });
 
